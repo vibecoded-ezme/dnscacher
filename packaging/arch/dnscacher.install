@@ -1,0 +1,28 @@
+post_install() {
+    systemctl daemon-reload
+    cat <<'EOF'
+dnscacher is installed but not enabled.
+
+  sudo systemctl enable --now dnscacher
+  dig @127.0.0.1 example.com
+
+Configuration: /etc/dnscacher.toml (listens on 127.0.0.1:53 by default).
+Logs:          journalctl -u dnscacher -f
+EOF
+}
+
+post_upgrade() {
+    systemctl daemon-reload
+
+    if systemctl is-active --quiet dnscacher.service; then
+        systemctl try-restart dnscacher.service
+    fi
+}
+
+pre_remove() {
+    systemctl disable --now dnscacher.service 2>/dev/null || true
+}
+
+post_remove() {
+    systemctl daemon-reload
+}

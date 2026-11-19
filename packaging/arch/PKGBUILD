@@ -1,0 +1,50 @@
+# Maintainer: dnscacher contributors
+#
+# Local-testing PKGBUILD.  It expects the source tarball produced by
+# packaging/arch/build-local.sh, which is also what you should run:
+#
+#   ./packaging/arch/build-local.sh        # makepkg -si
+#
+# For a published package, replace the placeholder url and use real
+# sha256sums instead of SKIP.
+
+pkgname=dnscacher
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Caching DNS forwarder with UDP, TCP, DoT and DoH upstreams'
+arch=('x86_64' 'aarch64')
+url='https://github.com/vibecoded-ezme/dnscacher'
+license=('MIT')
+depends=('gcc-libs' 'glibc')
+makedepends=('cargo' 'rust')
+backup=('etc/dnscacher.toml')
+install=dnscacher.install
+# ring's prebuilt assembly does not survive makepkg's global -flto.
+options=('!lto' '!debug')
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "$pkgname-$pkgver"
+    cargo build --release --locked
+}
+
+check() {
+    cd "$pkgname-$pkgver"
+    cargo test --release --locked
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+
+    install -Dm755 target/release/dnscacher "$pkgdir/usr/bin/dnscacher"
+    install -Dm644 deploy/dnscacher.toml "$pkgdir/etc/dnscacher.toml"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/dnscacher/README.md"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/dnscacher/LICENSE"
+
+    # The source unit targets a /usr/local install; adjust it for the package.
+    sed -e 's#/usr/local/bin/#/usr/bin/#' \
+        -e 's#/usr/local/share/#/usr/share/#' \
+        deploy/dnscacher.service |
+        install -Dm644 /dev/stdin "$pkgdir/usr/lib/systemd/system/dnscacher.service"
+}
