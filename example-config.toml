@@ -1,0 +1,41 @@
+# /etc/dnscacher.toml
+
+[cache]
+ttl = 86_400 # fixed seconds a positive answer is cached (overrides upstream TTL)
+nx = 3_600   # fixed seconds a negative answer is cached (overrides SOA MINIMUM)
+persistent = '/var/tmp/dnscacher.cache' # loaded at startup, written periodically and on exit
+temporary = '/tmp/dnscacher.cache'      # frequent crash-recovery snapshot
+
+[server]
+address = [ "127.0.0.1", "::1" ]
+port = 53
+# Unix socket used by `dnscacher --purge-cache DOMAIN` and `--purge-cache-all`.
+# Without it those commands only rewrite the snapshot files and cannot reach a
+# running server's in-memory cache.
+# control = "/run/dnscacher/control.sock"
+
+[dns]
+priority = "order" # order, round-robin, random, all
+dnssec = "allow"   # off, allow, enforce
+hosts = [ '/etc/hosts', '/etc/hosts.deny' ]
+# AdGuard-style `$dnsrewrite` rules for redirecting or overriding names.
+# rules = [ '/etc/dnscacher.rules' ]
+deny = "nx"        # nx/nxdomain, zero, loopback/loop, ip, or { ip = { ... } }
+# timeout = 5      # seconds per upstream attempt
+
+# Only use this server for nintendowifi.net and its subdomains.
+[dns.1]
+ipv4 = [ "95.217.77.181" ]
+domains = [ "nintendowifi.net" ]
+
+# Every table can hold several transports, tried as DoT, DoH, IPv6, IPv4 by
+# default.  DoT/DoH hostnames are resolved to the ipv4/ipv6 addresses of the
+# same table first, then via the system resolver.  The defaults are port 53 for
+# plain DNS, 853 for DoT and 443 for DoH; use an inline table or a nested
+# [dns.N.ipv4] table when a non-default port is needed.
+[dns.2]
+# order = [ "dot", "doh", "ipv6", "ipv4" ] # default
+ipv4 = [ "1.1.1.1", "1.0.0.1" ]
+ipv6 = [ "2606:4700:4700::1111", "2606:4700:4700::1001" ]
+dot = "cloudflare-dns.com"
+doh = "https://cloudflare-dns.com/dns-query"
