@@ -102,9 +102,7 @@ so make sure `cargo` is on root's `PATH`).
 The unit runs as a `DynamicUser` with only `CAP_NET_BIND_SERVICE`, keeps the
 cache under `/var/lib/dnscacher`, and exposes the control socket in
 `/run/dnscacher/control.sock` (`RuntimeDirectory=dnscacher`), and stops with
-SIGTERM so the cache is saved cleanly.  The installed config listens on `127.0.0.1:53` only, because
-systemd-resolved commonly owns `[::1]:53`; add `"::1"` to `[server] address`
-after disabling or moving its stub listener.
+SIGTERM so the cache is saved cleanly.
 
 Useful commands:
 
@@ -232,8 +230,8 @@ order = [ "dot", "doh", "ipv6", "ipv4" ]
 The simple forms are also accepted:
 
 ```toml
-ipv4 = [ "1.1.1.1" ]
-ipv6 = [ "2606:4700:4700::1111" ]
+ipv4 = [ "8.8.8.8" ]
+ipv6 = [ "2001:4860:4860::8888" ]
 dot = "dns.google"                    # port 853
 doh = "https://dns.google/dns-query"  # port 443
 ```
@@ -242,7 +240,7 @@ For a non-default port, either use the nested table shown above or an inline
 table:
 
 ```toml
-ipv4 = { addresses = [ "1.1.1.1" ], port = 5353 }
+ipv4 = { addresses = [ "8.8.8.8" ], port = 5353 }
 dot = { host = "dns.google", port = 8853 }
 doh = { url = "https://dns.google/dns-query", port = 8443 }
 ```
@@ -279,7 +277,7 @@ Here `cloudflare-dns.com` is tried at all four addresses (in the table's
 ipv6/ipv4 order), and TLS still verifies the certificate against the hostname.
 If those addresses do not answer or the certificate does not match, the system
 resolver is used as a fallback, so a table that pairs, say, Cloudflare plain
-DNS with `dns.google` still works.  When the table has no plain addresses, the
+DNS with `cloudflare-dns.com` still works.  When the table has no plain addresses, the
 hostname is resolved normally.  A `dot`/`doh` value that is already an IP
 literal is used directly.
 
