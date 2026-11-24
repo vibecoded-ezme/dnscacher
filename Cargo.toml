@@ -1,6 +1,6 @@
 [package]
 name = "dnscacher"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "A caching DNS forwarder with UDP, TCP, DoT and DoH server and upstreams"
 license = "MIT"
