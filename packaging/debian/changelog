@@ -1,3 +1,10 @@
+dnscacher (0.2.0) unstable; urgency=medium
+
+  * Add inbound DNS-over-TLS and DNS-over-HTTPS listeners.
+  * Add AdGuard-style rewrite rules and live cache purging.
+
+ -- dnscacher contributors <dnscacher@users.noreply.github.com>  Mon, 23 Nov 2026 00:00:00 +0000
+
 dnscacher (0.1.0) unstable; urgency=medium
 
   * Initial release.
