@@ -11,7 +11,7 @@
 pkgname=dnscacher
 pkgver=0.1.0
 pkgrel=1
-pkgdesc='Caching DNS forwarder with UDP, TCP, DoT and DoH upstreams'
+pkgdesc='Caching DNS forwarder with UDP, TCP, DoT and DoH server and upstreams'
 arch=('x86_64' 'aarch64')
 url='https://github.com/vibecoded-ezme/dnscacher'
 license=('MIT')
