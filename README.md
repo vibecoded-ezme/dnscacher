@@ -1,13 +1,15 @@
 # dnscacher
 
-A small caching DNS forwarder written in Rust.  It listens for normal DNS
-queries over UDP and TCP, forwards cache misses to plain DNS, DNS over TLS
-(DoT) or DNS over HTTPS (DoH) upstreams, and persists its cache across
-restarts.
+A small caching DNS forwarder written in Rust.  It serves ordinary DNS over
+UDP and TCP as well as DNS over TLS (DoT) and DNS over HTTPS (DoH), forwards
+cache misses to plain DNS, DNS over TLS (DoT) or DNS over HTTPS (DoH) upstreams,
+and persists its cache across restarts.
 
 ## Features
 
 - UDP and TCP server on any number of IPv4/IPv6 addresses.
+- Optional DoT (RFC 7858) and DoH (RFC 8484) listeners that use the same cache,
+  hosts files, rewrite rules and upstream selection.
 - Upstream priority modes: `order`, `round-robin`, `random`, `all`.
 - Plain DNS upstreams (UDP with automatic TCP retry on truncation), DoT via
   rustls, and DoH (RFC 8484 POST).
@@ -39,7 +41,7 @@ Port 53 needs root or `CAP_NET_BIND_SERVICE`.  For an unprivileged test run:
 
 ```sh
 cargo run -- --config example-config.toml --port 5353
-dig @127.0.0.1 -p 5353 example.com
+dog example.com @127.0.0.1:5353
 ```
 
 Useful options:
@@ -55,6 +57,19 @@ Useful options:
 ```
 
 `DNSCACHER_CONFIG`, `DNSCACHER_LOG` and `RUST_LOG` are also read.
+
+### Checks
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+cargo audit
+cargo deny check
+```
+
+`cargo deny` reads `deny.toml` and checks advisories, licenses, duplicate
+versions and crate sources.
 
 ### Purging the cache
 
@@ -109,7 +124,7 @@ Useful commands:
 ```sh
 systemctl status dnscacher
 journalctl -u dnscacher -f
-dig @127.0.0.1 example.com
+dog example.com @127.0.0.1
 sudo dnscacher --purge-cache example.com
 sudo systemctl disable --now dnscacher
 ```
@@ -154,6 +169,129 @@ arguments to `makepkg`, so `./packaging/arch/build-local.sh -f` builds without
 installing.  Don't mix it with `deploy/install.sh`: that script installs to
 `/usr/local` and `/etc/systemd/system`, which would shadow the packaged unit.
 
+### Debian package
+
+`packaging/debian/` contains a debhelper source tree plus `build-deb.sh`, which
+assembles a binary package without requiring debhelper or dpkg development
+tools (it uses `ar`, `tar` and `md5sum`):
+
+```sh
+./packaging/debian/build-deb.sh        # target/debian/dnscacher_0.1.0_<arch>.deb
+sudo apt install ./target/debian/dnscacher_0.1.0_amd64.deb
+sudo systemctl enable --now dnscacher
+```
+
+The package installs `/usr/bin/dnscacher`, `/etc/dnscacher.toml` (a conffile),
+the unit in `/usr/lib/systemd/system`, and documentation and the license in
+`/usr/share/doc/dnscacher`.  It is not enabled automatically, and a modified
+configuration is left in place when the package is removed.
+
+To build with the regular Debian tooling instead:
+
+```sh
+cp -r packaging/debian debian
+dpkg-buildpackage -us -uc -b
+```
+
+This needs `build-essential`, `debhelper` and a Rust toolchain (`cargo`,
+`rustc`, or `rustup`).  `debian/control` declares the dependencies.
+
+## Serving DoT and DoH
+
+The DoT and DoH listeners are optional and disabled by default.  They share the
+cache, hosts files, rewrite rules, DNSSEC policy and upstreams with the plain
+server, so a name cached over UDP is also served over TLS and HTTPS.
+
+```toml
+[server]
+address = [ "127.0.0.1", "::1" ]
+port = 53
+
+# DNS over TLS (RFC 7858).
+[server.dot]
+port = 853                    # default 853
+# address = [ "127.0.0.1" ]  # optional; defaults to [server] address
+cert = "/etc/dnscacher/tls/cert.pem"
+key = "/etc/dnscacher/tls/key.pem"
+
+# DNS over HTTPS (RFC 8484).
+[server.doh]
+port = 443                    # default 443
+path = "/dns-query"           # default /dns-query
+cert = "/etc/dnscacher/tls/cert.pem"
+key = "/etc/dnscacher/tls/key.pem"
+```
+
+- `cert` is a PEM certificate chain, leaf certificate first.  `key` may be a
+  PKCS#8, PKCS#1 (RSA) or SEC1 (EC) PEM private key.
+- DoH answers only the configured path.  It accepts `POST` with
+  `Content-Type: application/dns-message` and `GET` with a base64url `?dns=`
+  parameter (padding optional), over HTTP/2 or HTTP/1.1; `h2` is preferred via
+  ALPN.  Request bodies are limited to 65535 bytes.
+- DoT speaks standard two-byte length-prefixed DNS over TLS 1.2/1.3.  Idle
+  DoT connections close after five minutes; plain TCP closes after 30 seconds.
+- A missing, unreadable or mismatched certificate/key pair is an error at
+  startup, and `--check` validates it before the service starts.
+- Ports below 1024 need `CAP_NET_BIND_SERVICE`; the packaged unit already has
+  that capability.  High ports work for unprivileged testing.
+
+### Test certificate
+
+For a local deployment, a self-signed certificate with the right subject
+alternative names is enough:
+
+```sh
+sudo install -d -m 0755 /etc/dnscacher/tls
+sudo openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+  -keyout /etc/dnscacher/tls/key.pem \
+  -out /etc/dnscacher/tls/cert.pem \
+  -subj '/CN=dnscacher' \
+  -addext 'subjectAltName=DNS:dnscacher,DNS:localhost,IP:127.0.0.1'
+```
+
+Clients must trust that certificate.  `dog` uses OpenSSL's trust store, so for a
+self-signed certificate point `SSL_CERT_FILE` at it; `curl --cacert` and
+`kdig +tls-ca` take the file directly.  With systemd's `DynamicUser=yes`, the
+private key must be readable by the service account.  Either make it
+world-readable (`0644`) or pass it as a systemd credential and point `key` at
+`/run/credentials/dnscacher.service/tls-key`; see the commented
+`LoadCredential=` lines in `deploy/dnscacher.service`.
+
+### Querying the listeners
+
+`dog` speaks plain DNS, DoT and DoH, and is the simplest client:
+
+```sh
+# DoT.  Leave out SSL_CERT_FILE when the certificate is trusted system-wide.
+SSL_CERT_FILE=/etc/dnscacher/tls/cert.pem \
+  dog -S example.com @127.0.0.1:853
+
+# DoH (the URL is the nameserver; -H selects HTTPS).
+SSL_CERT_FILE=/etc/dnscacher/tls/cert.pem \
+  dog -H example.com @https://dns.example.com/dns-query
+
+# JSON output, handy for scripts.
+SSL_CERT_FILE=/etc/dnscacher/tls/cert.pem \
+  dog -H -J example.com @https://dns.example.com/dns-query
+```
+
+`dog` 0.1.0 always connects to port 443 for DoH and cannot select another port,
+so a listener on 8443 needs `curl` or `kdig`.  `dig` has no DoH support; use
+`dog -H`, `kdig +https`, or a browser with a custom DoH URL.
+
+For a non-default port, or to check the HTTP details directly:
+
+```sh
+# DoH POST, where query.bin is a raw DNS query
+curl --http2 --cacert /etc/dnscacher/tls/cert.pem \
+  -H 'content-type: application/dns-message' \
+  --data-binary @query.bin https://127.0.0.1:8443/dns-query
+
+# DoH GET (base64url-encoded query without padding)
+curl --http2 --cacert /etc/dnscacher/tls/cert.pem \
+  'https://127.0.0.1:8443/dns-query?dns=AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB'
+```
+
 ## Configuration
 
 See `example-config.toml` for a complete file.
@@ -172,6 +310,9 @@ address = [ "127.0.0.1", "::1" ]
 port = 53
 control = "/run/dnscacher/control.sock" # optional; enables live cache purging
 
+# Optional DoT and DoH listeners are configured as [server.dot] and
+# [server.doh]; see "Serving DoT and DoH" below.
+
 [dns]
 priority = "order" # order, round-robin, random, all
 dnssec = "allow"   # off, allow, enforce
@@ -184,7 +325,7 @@ timeout = 5        # optional, seconds per upstream attempt
 - `persistent` is loaded at startup, written every five minutes and on clean
   shutdown.  `temporary` is written every 15 seconds and removed on clean
   shutdown; it exists so a crash does not throw the cache away.  Both are
-  bincode snapshots and may be omitted.
+  postcard-encoded snapshots and may be omitted.
 - `control` is a Unix socket (created with mode `0600`) that accepts purge
   commands from the same binary.  See [Purging the cache](#purging-the-cache).
 - `cache.ttl` and `cache.nx` are fixed lifetimes: a positive answer is cached
@@ -456,9 +597,10 @@ local hosts address or PTR record always wins.
   get NOTIMP.
 - Every upstream attempt gets a fresh UDP socket and random message ID.
 - Responses are accepted only when the ID, opcode and question match.
-- DoH always uses POST with `Content-Type: application/dns-message`.
+- Upstream DoH requests always use POST with `Content-Type: application/dns-message`.
 - The server advertises a 1232-byte EDNS payload upstream and truncates UDP
-  responses to the client's advertised size (512 bytes without EDNS).
+  responses to the client's advertised size (512 bytes without EDNS).  DoT and
+  DoH responses are never truncated.
 
 ## License
 

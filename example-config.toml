@@ -14,6 +14,20 @@ port = 53
 # running server's in-memory cache.
 # control = "/run/dnscacher/control.sock"
 
+# Optional DNS over TLS (RFC 7858) and DNS over HTTPS (RFC 8484) listeners.
+# They share the cache, hosts files and rewrites with the plain server.  Point
+# `--check` at the config after setting these up; it validates the key pair.
+# [server.dot]
+# port = 853
+# cert = "/etc/dnscacher/tls/cert.pem"
+# key = "/etc/dnscacher/tls/key.pem"
+#
+# [server.doh]
+# port = 443
+# path = "/dns-query"
+# cert = "/etc/dnscacher/tls/cert.pem"
+# key = "/etc/dnscacher/tls/key.pem"
+
 [dns]
 priority = "order" # order, round-robin, random, all
 dnssec = "allow"   # off, allow, enforce
