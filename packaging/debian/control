@@ -1,7 +1,7 @@
 Source: dnscacher
 Section: net
 Priority: optional
-Maintainer: dnscacher contributors <dnscacher@users.noreply.github.com>
+Maintainer: ez-me <66479626+ez-me@users.noreply.github.com>
 Build-Depends: debhelper-compat (= 13), cargo, rustc
 Standards-Version: 4.6.2
 Rules-Requires-Root: no
