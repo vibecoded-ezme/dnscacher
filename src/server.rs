@@ -8,6 +8,11 @@ use std::{
 };
 
 use anyhow::{bail, Result};
+use base64::{
+    engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
+    Engine as _,
+};
+use bytes::Bytes;
 use hickory_proto::{
     op::{Edns, Message, OpCode, ResponseCode},
     rr::{
@@ -15,18 +20,30 @@ use hickory_proto::{
         DNSClass, Name, RData, Record, RecordType,
     },
 };
+use http_body_util::{BodyExt, Full, Limited};
+use hyper::{
+    body::Incoming,
+    header::{ALLOW, CONTENT_TYPE},
+    service::service_fn,
+    Method, Request, Response, StatusCode,
+};
+use hyper_util::{
+    rt::{TokioExecutor, TokioIo},
+    server::conn::auto::Builder as HttpBuilder,
+};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream, UdpSocket},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    net::{TcpListener, UdpSocket},
     sync::{watch, Semaphore},
     task::JoinHandle,
     time::timeout,
 };
+use tokio_rustls::TlsAcceptor;
 use tracing::{debug, info, trace, warn};
 
 use crate::{
     cache::{now_unix, CacheKey, DnsCache},
-    config::{DenyMode, DnssecMode},
+    config::{DenyMode, DnssecMode, ServerConfig as ServerSettings},
     hosts::{Addresses, HostsStore},
     rules::{Rewrite, RulesStore},
     upstream::{ResolvedAnswer, Resolver},
@@ -41,6 +58,10 @@ const MAX_UDP_PAYLOAD: u16 = 4096;
 const MAX_UDP_IN_FLIGHT: usize = 1024;
 const MAX_TCP_CONNECTIONS: usize = 1024;
 const TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const DOT_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const DOH_MAX_BODY: usize = u16::MAX as usize;
+const DNS_MESSAGE_MEDIA_TYPE: &str = "application/dns-message";
 
 pub struct AppState {
     pub cache: Arc<DnsCache>,
@@ -55,19 +76,18 @@ pub struct AppState {
 /// caller can abort them during shutdown.
 pub async fn start(
     state: Arc<AppState>,
-    addresses: &[IpAddr],
-    port: u16,
+    settings: &ServerSettings,
     shutdown: watch::Receiver<bool>,
 ) -> Result<Vec<JoinHandle<()>>> {
     let mut handles = Vec::new();
-    let mut bound_any = false;
+    let mut bound_plain = false;
 
-    for address in addresses {
-        let socket_address = SocketAddr::new(*address, port);
+    for address in &settings.address {
+        let socket_address = SocketAddr::new(*address, settings.port);
 
         match UdpSocket::bind(socket_address).await {
             Ok(socket) => {
-                bound_any = true;
+                bound_plain = true;
                 info!(%socket_address, "listening on UDP");
                 handles.push(tokio::spawn(udp_loop(
                     state.clone(),
@@ -82,7 +102,7 @@ pub async fn start(
 
         match TcpListener::bind(socket_address).await {
             Ok(listener) => {
-                bound_any = true;
+                bound_plain = true;
                 info!(%socket_address, "listening on TCP");
                 handles.push(tokio::spawn(tcp_loop(
                     state.clone(),
@@ -96,8 +116,69 @@ pub async fn start(
         }
     }
 
-    if !bound_any {
-        bail!("failed to bind any server address on port {port} (are you root? try --port 5353)");
+    if !bound_plain {
+        bail!(
+            "failed to bind any server address on port {} (are you root? try --port 5353)",
+            settings.port
+        );
+    }
+
+    if let Some(dot) = &settings.dot {
+        let acceptor = TlsAcceptor::from(crate::tls::load_server_config(&dot.cert, &dot.key, &[])?);
+        let mut bound_dot = false;
+        for address in dot.listen_addresses(settings) {
+            let socket_address = SocketAddr::new(*address, dot.port);
+            match TcpListener::bind(socket_address).await {
+                Ok(listener) => {
+                    bound_dot = true;
+                    info!(%socket_address, "listening on DNS over TLS");
+                    handles.push(tokio::spawn(dot_loop(
+                        state.clone(),
+                        listener,
+                        acceptor.clone(),
+                        shutdown.clone(),
+                    )));
+                }
+                Err(error) => {
+                    warn!(%socket_address, %error, "failed to bind DoT listener");
+                }
+            }
+        }
+        if !bound_dot {
+            bail!("failed to bind any DoT listener on port {}", dot.port);
+        }
+    }
+
+    if let Some(doh) = &settings.doh {
+        let acceptor = TlsAcceptor::from(crate::tls::load_server_config(
+            &doh.cert,
+            &doh.key,
+            &[b"h2", b"http/1.1"],
+        )?);
+        let path = Arc::<str>::from(doh.path.as_str());
+        let mut bound_doh = false;
+        for address in doh.listen_addresses(settings) {
+            let socket_address = SocketAddr::new(*address, doh.port);
+            match TcpListener::bind(socket_address).await {
+                Ok(listener) => {
+                    bound_doh = true;
+                    info!(%socket_address, path = %path, "listening on DNS over HTTPS");
+                    handles.push(tokio::spawn(doh_loop(
+                        state.clone(),
+                        listener,
+                        acceptor.clone(),
+                        path.clone(),
+                        shutdown.clone(),
+                    )));
+                }
+                Err(error) => {
+                    warn!(%socket_address, %error, "failed to bind DoH listener");
+                }
+            }
+        }
+        if !bound_doh {
+            bail!("failed to bind any DoH listener on port {}", doh.port);
+        }
     }
 
     Ok(handles)
@@ -179,19 +260,262 @@ async fn tcp_loop(
                 let state = state.clone();
                 tokio::spawn(async move {
                     let _permit = permit;
-                    handle_tcp_connection(state, stream, peer).await;
+                    stream.set_nodelay(true).ok();
+                    handle_tcp_connection(state, stream, peer, TCP_IDLE_TIMEOUT).await;
                 });
             }
         }
     }
 }
 
-async fn handle_tcp_connection(state: Arc<AppState>, mut stream: TcpStream, peer: SocketAddr) {
-    stream.set_nodelay(true).ok();
+async fn dot_loop(
+    state: Arc<AppState>,
+    listener: TcpListener,
+    acceptor: TlsAcceptor,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let connections = Arc::new(Semaphore::new(MAX_TCP_CONNECTIONS));
+
+    loop {
+        tokio::select! {
+            _ = shutdown_requested(&mut shutdown) => break,
+            result = listener.accept() => {
+                let (stream, peer) = match result {
+                    Ok(value) => value,
+                    Err(error) => {
+                        warn!(%error, "DoT accept failed");
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    }
+                };
+
+                let permit = match connections.clone().try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        warn!(%peer, "dropping DoT connection: too many connections");
+                        continue;
+                    }
+                };
+
+                let state = state.clone();
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    stream.set_nodelay(true).ok();
+                    match timeout(TLS_HANDSHAKE_TIMEOUT, acceptor.accept(stream)).await {
+                        Ok(Ok(stream)) => {
+                            handle_tcp_connection(state, stream, peer, DOT_IDLE_TIMEOUT).await;
+                        }
+                        Ok(Err(error)) => debug!(%peer, %error, "DoT handshake failed"),
+                        Err(_) => debug!(%peer, "DoT handshake timed out"),
+                    }
+                });
+            }
+        }
+    }
+}
+
+async fn doh_loop(
+    state: Arc<AppState>,
+    listener: TcpListener,
+    acceptor: TlsAcceptor,
+    path: Arc<str>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let connections = Arc::new(Semaphore::new(MAX_TCP_CONNECTIONS));
+
+    loop {
+        tokio::select! {
+            _ = shutdown_requested(&mut shutdown) => break,
+            result = listener.accept() => {
+                let (stream, peer) = match result {
+                    Ok(value) => value,
+                    Err(error) => {
+                        warn!(%error, "DoH accept failed");
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
+                    }
+                };
+
+                let permit = match connections.clone().try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        warn!(%peer, "dropping DoH connection: too many connections");
+                        continue;
+                    }
+                };
+
+                let state = state.clone();
+                let acceptor = acceptor.clone();
+                let path = path.clone();
+                tokio::spawn(async move {
+                    let _permit = permit;
+                    stream.set_nodelay(true).ok();
+                    let stream = match timeout(TLS_HANDSHAKE_TIMEOUT, acceptor.accept(stream)).await {
+                        Ok(Ok(stream)) => stream,
+                        Ok(Err(error)) => {
+                            debug!(%peer, %error, "DoH handshake failed");
+                            return;
+                        }
+                        Err(_) => {
+                            debug!(%peer, "DoH handshake timed out");
+                            return;
+                        }
+                    };
+
+                    let service = service_fn(move |request: Request<Incoming>| {
+                        let state = state.clone();
+                        let path = path.clone();
+                        async move {
+                            Ok::<_, std::convert::Infallible>(
+                                doh_request(&state, peer, &path, request).await,
+                            )
+                        }
+                    });
+
+                    let builder = HttpBuilder::new(TokioExecutor::new());
+                    if let Err(error) = builder
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await
+                    {
+                        debug!(%peer, %error, "DoH connection failed");
+                    }
+                });
+            }
+        }
+    }
+}
+
+async fn doh_request(
+    state: &AppState,
+    peer: SocketAddr,
+    path: &str,
+    request: Request<Incoming>,
+) -> Response<Full<Bytes>> {
+    if request.uri().path() != path {
+        return http_text(StatusCode::NOT_FOUND, "not found");
+    }
+
+    let wire = match *request.method() {
+        Method::POST => {
+            if !is_dns_message_content_type(&request) {
+                return http_text(
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "expected Content-Type: application/dns-message",
+                );
+            }
+            let body = request.into_body();
+            match Limited::new(body, DOH_MAX_BODY).collect().await {
+                Ok(collected) => collected.to_bytes().to_vec(),
+                Err(error) if error.is::<http_body_util::LengthLimitError>() => {
+                    return http_text(StatusCode::PAYLOAD_TOO_LARGE, "DNS message too large");
+                }
+                Err(error) => {
+                    debug!(%peer, %error, "failed to read DoH request body");
+                    return http_text(StatusCode::BAD_REQUEST, "failed to read request body");
+                }
+            }
+        }
+        Method::GET => {
+            let Some(encoded) = query_parameter(request.uri(), "dns") else {
+                return http_text(StatusCode::BAD_REQUEST, "missing dns query parameter");
+            };
+            match decode_dns_parameter(&encoded) {
+                Some(wire) => wire,
+                None => return http_text(StatusCode::BAD_REQUEST, "invalid dns query parameter"),
+            }
+        }
+        _ => {
+            return Response::builder()
+                .status(StatusCode::METHOD_NOT_ALLOWED)
+                .header(ALLOW, "GET, POST")
+                .header(CONTENT_TYPE, "text/plain; charset=utf-8")
+                .body(Full::new(Bytes::from_static(b"method not allowed\n")))
+                .expect("valid response");
+        }
+    };
+
+    if wire.is_empty() {
+        return http_text(StatusCode::BAD_REQUEST, "empty DNS message");
+    }
+
+    match handle(state, &wire, peer, false).await {
+        Some(response) => Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, DNS_MESSAGE_MEDIA_TYPE)
+            .body(Full::new(Bytes::from(response)))
+            .expect("valid response"),
+        None => http_text(StatusCode::BAD_REQUEST, "not a DNS query"),
+    }
+}
+
+fn http_text(status: StatusCode, message: &str) -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(status)
+        .header(CONTENT_TYPE, "text/plain; charset=utf-8")
+        .body(Full::new(Bytes::from(format!("{message}\n"))))
+        .expect("valid response")
+}
+
+fn is_dns_message_content_type(request: &Request<Incoming>) -> bool {
+    request
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(|value| value.trim().eq_ignore_ascii_case(DNS_MESSAGE_MEDIA_TYPE))
+        .unwrap_or(false)
+}
+
+fn query_parameter(uri: &hyper::Uri, name: &str) -> Option<String> {
+    for pair in uri.query()?.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if key == name {
+            return Some(percent_decode(value));
+        }
+    }
+    None
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let high = (bytes[index + 1] as char).to_digit(16);
+            let low = (bytes[index + 2] as char).to_digit(16);
+            if let (Some(high), Some(low)) = (high, low) {
+                decoded.push((high * 16 + low) as u8);
+                index += 3;
+                continue;
+            }
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+fn decode_dns_parameter(value: &str) -> Option<Vec<u8>> {
+    URL_SAFE_NO_PAD
+        .decode(value)
+        .or_else(|_| URL_SAFE.decode(value))
+        .ok()
+}
+
+async fn handle_tcp_connection<S>(
+    state: Arc<AppState>,
+    mut stream: S,
+    peer: SocketAddr,
+    idle: Duration,
+) where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     trace!(%peer, "TCP connection opened");
 
     loop {
-        let frame = match timeout(TCP_IDLE_TIMEOUT, read_tcp_message(&mut stream)).await {
+        let frame = match timeout(idle, read_tcp_message(&mut stream)).await {
             Ok(Ok(Some(frame))) => frame,
             Ok(Ok(None)) => break,
             Ok(Err(error)) => {
@@ -221,7 +545,10 @@ async fn handle_tcp_connection(state: Arc<AppState>, mut stream: TcpStream, peer
     trace!(%peer, "TCP connection closed");
 }
 
-async fn read_tcp_message(stream: &mut TcpStream) -> std::io::Result<Option<Vec<u8>>> {
+async fn read_tcp_message<S>(stream: &mut S) -> std::io::Result<Option<Vec<u8>>>
+where
+    S: AsyncRead + Unpin,
+{
     let mut length = [0u8; 2];
     match stream.read_exact(&mut length).await {
         Ok(_) => {}
@@ -239,7 +566,10 @@ async fn read_tcp_message(stream: &mut TcpStream) -> std::io::Result<Option<Vec<
     Ok(Some(frame))
 }
 
-async fn write_tcp_message(stream: &mut TcpStream, response: &[u8]) -> std::io::Result<()> {
+async fn write_tcp_message<S>(stream: &mut S, response: &[u8]) -> std::io::Result<()>
+where
+    S: AsyncWrite + Unpin,
+{
     stream
         .write_all(&(response.len() as u16).to_be_bytes())
         .await?;
@@ -1152,5 +1482,30 @@ mod tests {
         assert_eq!(entry.message.metadata.response_code, ResponseCode::NXDomain);
         assert!(entry.message.answers.is_empty());
         assert!(has_soa(&entry.message));
+    }
+
+    #[test]
+    fn reads_the_doh_dns_query_parameter() {
+        let uri: hyper::Uri = "/dns-query?dns=AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB"
+            .parse()
+            .unwrap();
+        let value = query_parameter(&uri, "dns").unwrap();
+        let wire = decode_dns_parameter(&value).unwrap();
+        assert_eq!(&wire, b"\x00\x00\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x03www\x07example\x03com\x00\x00\x01\x00\x01");
+
+        assert_eq!(percent_decode("AA%3D%3D"), "AA==");
+        assert_eq!(
+            decode_dns_parameter(&percent_decode("AA%3D%3D")).unwrap(),
+            vec![0u8]
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_doh_parameters() {
+        let uri: hyper::Uri = "/dns-query?dns=***".parse().unwrap();
+        assert!(decode_dns_parameter(&query_parameter(&uri, "dns").unwrap()).is_none());
+
+        let uri: hyper::Uri = "/dns-query".parse().unwrap();
+        assert!(query_parameter(&uri, "dns").is_none());
     }
 }

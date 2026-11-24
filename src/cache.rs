@@ -27,7 +27,7 @@ use tracing::{debug, info, warn};
 
 use crate::config::{domain_matches, CacheConfig};
 
-const CACHE_VERSION: u32 = 1;
+const CACHE_VERSION: u32 = 2;
 const MAX_CACHE_ENTRIES: u64 = 100_000;
 const MAX_SNAPSHOT_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -344,7 +344,7 @@ fn write_snapshot(path: &Path, entries: Vec<(CacheKey, CacheEntry)>) -> Result<(
 }
 
 fn write_disk(path: &Path, disk: &DiskCache) -> Result<()> {
-    let bytes = bincode::serialize(disk).context("failed to encode cache snapshot")?;
+    let bytes = postcard::to_stdvec(&disk).context("failed to encode cache snapshot")?;
 
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -402,8 +402,15 @@ fn read_disk(path: &Path) -> Result<DiskCache> {
 
     let bytes =
         std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let disk: DiskCache = bincode::deserialize(&bytes)
+    let (disk, remainder): (DiskCache, &[u8]) = postcard::take_from_bytes(&bytes)
         .with_context(|| format!("failed to decode {}", path.display()))?;
+    if !remainder.is_empty() {
+        bail!(
+            "cache snapshot {} has {} trailing bytes",
+            path.display(),
+            remainder.len()
+        );
+    }
     if disk.version != CACHE_VERSION {
         bail!(
             "unsupported cache version {} (expected {})",
@@ -723,5 +730,35 @@ mod tests {
             )),
         ));
         message
+    }
+}
+
+#[cfg(test)]
+mod postcard_roundtrip_tests {
+    use super::*;
+
+    #[test]
+    fn disk_cache_roundtrips() {
+        let disk = DiskCache {
+            version: CACHE_VERSION,
+            entries: vec![DiskEntry {
+                key: CacheKey {
+                    name: "example.com.".into(),
+                    query_type: 1,
+                    query_class: 1,
+                    dnssec_ok: false,
+                    checking_disabled: false,
+                },
+                wire: vec![0, 1, 2, 3],
+                stored_at: 1,
+                expires_at: 2,
+                negative: false,
+            }],
+        };
+        let bytes = postcard::to_stdvec(&disk).unwrap();
+        let (decoded, remainder): (DiskCache, &[u8]) = postcard::take_from_bytes(&bytes).unwrap();
+        assert!(remainder.is_empty());
+        assert_eq!(decoded.version, disk.version);
+        assert_eq!(decoded.entries.len(), 1);
     }
 }

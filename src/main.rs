@@ -4,6 +4,7 @@ mod control;
 mod hosts;
 mod rules;
 mod server;
+mod tls;
 mod upstream;
 
 use std::{
@@ -39,7 +40,7 @@ const HOSTS_RELOAD_INTERVAL: Duration = Duration::from_secs(60);
 #[command(
     name = "dnscacher",
     version,
-    about = "A caching DNS forwarder with UDP, TCP, DoT and DoH upstreams"
+    about = "A caching DNS forwarder with UDP, TCP, DoT and DoH server and upstreams"
 )]
 struct Cli {
     /// Path to the TOML configuration file.
@@ -156,13 +157,7 @@ async fn main() -> Result<()> {
         None => None,
     };
 
-    let server_tasks = server::start(
-        state.clone(),
-        &config.server.address,
-        config.server.port,
-        shutdown_rx.clone(),
-    )
-    .await?;
+    let server_tasks = server::start(state.clone(), &config.server, shutdown_rx.clone()).await?;
 
     let mut flush_task =
         spawn_cache_flusher(cache.clone(), config.cache.clone(), shutdown_rx.clone());

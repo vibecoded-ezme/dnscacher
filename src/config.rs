@@ -71,6 +71,19 @@ impl Config {
             bail!("[dns] deny.ip must specify ipv4, ipv6, or both");
         }
 
+        if let Some(dot) = &self.server.dot {
+            validate_tls_listener("dot", dot.port, &dot.cert, &dot.key)?;
+        }
+        if let Some(doh) = &self.server.doh {
+            if !doh.path.starts_with('/') {
+                bail!("[server.doh] path must start with '/'");
+            }
+            if doh.path.contains(['?', '#']) || doh.path.chars().any(char::is_whitespace) {
+                bail!("[server.doh] path must not contain whitespace, '?' or '#'");
+            }
+            validate_tls_listener("doh", doh.port, &doh.cert, &doh.key)?;
+        }
+
         // Building the upstreams validates every table and domain pattern.
         let upstreams = self.dns.build_upstreams()?;
         if upstreams.is_empty() && self.dns.hosts.is_empty() {
@@ -87,6 +100,21 @@ impl Config {
             "server: {:?}:{} control={:?}\n",
             self.server.address, self.server.port, self.server.control
         ));
+        if let Some(dot) = &self.server.dot {
+            out.push_str(&format!(
+                "dot: {:?}:{}\n",
+                dot.listen_addresses(&self.server),
+                dot.port
+            ));
+        }
+        if let Some(doh) = &self.server.doh {
+            out.push_str(&format!(
+                "doh: {:?}:{}{}\n",
+                doh.listen_addresses(&self.server),
+                doh.port,
+                doh.path
+            ));
+        }
         out.push_str(&format!(
             "cache: ttl={}s nx={}s persistent={:?} temporary={:?}\n",
             self.cache.ttl, self.cache.nx, self.cache.persistent, self.cache.temporary
@@ -158,6 +186,10 @@ pub struct ServerConfig {
     pub port: u16,
     /// Unix socket used by `--purge-cache` / `--purge-cache-all`.
     pub control: Option<PathBuf>,
+    /// Optional DNS-over-TLS listener (RFC 7858).
+    pub dot: Option<DotConfig>,
+    /// Optional DNS-over-HTTPS listener (RFC 8484).
+    pub doh: Option<DohConfig>,
 }
 
 impl Default for ServerConfig {
@@ -169,8 +201,96 @@ impl Default for ServerConfig {
             ],
             port: 53,
             control: None,
+            dot: None,
+            doh: None,
         }
     }
+}
+
+/// `[server.dot]` — DNS over TLS.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DotConfig {
+    /// Addresses to listen on; defaults to `[server] address`.
+    pub address: Vec<IpAddr>,
+    pub port: u16,
+    /// PEM certificate chain, leaf certificate first.
+    pub cert: PathBuf,
+    /// PEM private key (PKCS#8, PKCS#1 or SEC1).
+    pub key: PathBuf,
+}
+
+impl Default for DotConfig {
+    fn default() -> Self {
+        Self {
+            address: Vec::new(),
+            port: DEFAULT_DOT_PORT,
+            cert: PathBuf::new(),
+            key: PathBuf::new(),
+        }
+    }
+}
+
+impl DotConfig {
+    pub fn listen_addresses<'a>(&'a self, server: &'a ServerConfig) -> &'a [IpAddr] {
+        if self.address.is_empty() {
+            &server.address
+        } else {
+            &self.address
+        }
+    }
+}
+
+/// `[server.doh]` — DNS over HTTPS.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DohConfig {
+    /// Addresses to listen on; defaults to `[server] address`.
+    pub address: Vec<IpAddr>,
+    pub port: u16,
+    /// URL path answered with DNS messages, for example `/dns-query`.
+    pub path: String,
+    /// PEM certificate chain, leaf certificate first.
+    pub cert: PathBuf,
+    /// PEM private key (PKCS#8, PKCS#1 or SEC1).
+    pub key: PathBuf,
+}
+
+impl Default for DohConfig {
+    fn default() -> Self {
+        Self {
+            address: Vec::new(),
+            port: DEFAULT_DOH_PORT,
+            path: "/dns-query".to_string(),
+            cert: PathBuf::new(),
+            key: PathBuf::new(),
+        }
+    }
+}
+
+impl DohConfig {
+    pub fn listen_addresses<'a>(&'a self, server: &'a ServerConfig) -> &'a [IpAddr] {
+        if self.address.is_empty() {
+            &server.address
+        } else {
+            &self.address
+        }
+    }
+}
+
+fn validate_tls_listener(name: &str, port: u16, cert: &Path, key: &Path) -> Result<()> {
+    if port == 0 {
+        bail!("[server.{name}] port must not be zero");
+    }
+    if cert.as_os_str().is_empty() {
+        bail!("[server.{name}] cert is required");
+    }
+    if key.as_os_str().is_empty() {
+        bail!("[server.{name}] key is required");
+    }
+    crate::tls::load_server_config(cert, key, &[])
+        .with_context(|| format!("invalid [server.{name}] TLS configuration"))?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -944,5 +1064,119 @@ ipv4 = [ "1.1.1.1" ]
         .unwrap();
         let error = config.validate().unwrap_err().to_string();
         assert!(error.contains("deny.ip must specify"), "{error}");
+    }
+
+    #[test]
+    fn dot_and_doh_default_to_the_server_addresses() {
+        let server: ServerConfig = toml::from_str(
+            r#"
+address = [ "192.0.2.1", "2001:db8::1" ]
+port = 5353
+
+[dot]
+cert = "/tmp/cert.pem"
+key = "/tmp/key.pem"
+
+[doh]
+cert = "/tmp/cert.pem"
+key = "/tmp/key.pem"
+"#,
+        )
+        .unwrap();
+
+        let dot = server.dot.as_ref().unwrap();
+        assert_eq!(dot.port, DEFAULT_DOT_PORT);
+        assert_eq!(dot.listen_addresses(&server), &server.address);
+
+        let doh = server.doh.as_ref().unwrap();
+        assert_eq!(doh.port, DEFAULT_DOH_PORT);
+        assert_eq!(doh.path, "/dns-query");
+        assert_eq!(doh.listen_addresses(&server), &server.address);
+    }
+
+    #[test]
+    fn dot_and_doh_can_override_the_addresses() {
+        let server: ServerConfig = toml::from_str(
+            r#"
+address = [ "127.0.0.1" ]
+
+[dot]
+address = [ "10.0.0.1" ]
+port = 8853
+cert = "/tmp/cert.pem"
+key = "/tmp/key.pem"
+
+[doh]
+address = [ "10.0.0.2" ]
+port = 8443
+path = "/custom"
+cert = "/tmp/cert.pem"
+key = "/tmp/key.pem"
+"#,
+        )
+        .unwrap();
+
+        let dot = server.dot.as_ref().unwrap();
+        assert_eq!(dot.port, 8853);
+        assert_eq!(dot.listen_addresses(&server)[0].to_string(), "10.0.0.1");
+
+        let doh = server.doh.as_ref().unwrap();
+        assert_eq!(doh.port, 8443);
+        assert_eq!(doh.path, "/custom");
+        assert_eq!(doh.listen_addresses(&server)[0].to_string(), "10.0.0.2");
+    }
+
+    #[test]
+    fn rejects_a_relative_doh_path() {
+        let config: Config = toml::from_str(
+            r#"
+[server.doh]
+path = "dns-query"
+cert = "/tmp/cert.pem"
+key = "/tmp/key.pem"
+
+[dns.1]
+ipv4 = [ "1.1.1.1" ]
+"#,
+        )
+        .unwrap();
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("path must start with '/'"), "{error}");
+    }
+
+    #[test]
+    fn requires_tls_files_for_enabled_listeners() {
+        let config: Config = toml::from_str(
+            r#"
+[server.dot]
+port = 8853
+
+[dns.1]
+ipv4 = [ "1.1.1.1" ]
+"#,
+        )
+        .unwrap();
+        let error = config.validate().unwrap_err().to_string();
+        assert!(error.contains("cert is required"), "{error}");
+    }
+
+    #[test]
+    fn reports_missing_tls_certificates() {
+        let config: Config = toml::from_str(
+            r#"
+[server.doh]
+cert = "/nonexistent/dnscacher-cert.pem"
+key = "/nonexistent/dnscacher-key.pem"
+
+[dns.1]
+ipv4 = [ "1.1.1.1" ]
+"#,
+        )
+        .unwrap();
+        let error = config.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("invalid [server.doh] TLS configuration"),
+            "{error}"
+        );
     }
 }
