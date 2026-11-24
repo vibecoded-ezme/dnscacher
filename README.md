@@ -37,6 +37,10 @@ cargo build --release
 sudo ./target/release/dnscacher --config example-config.toml
 ```
 
+Release builds use fat LTO, one codegen unit, `panic = "abort"` and stripped
+symbols (see `[profile.release]` in `Cargo.toml`), so the first build takes
+longer but produces a smaller binary.
+
 Port 53 needs root or `CAP_NET_BIND_SERVICE`.  For an unprivileged test run:
 
 ```sh
@@ -176,8 +180,8 @@ assembles a binary package without requiring debhelper or dpkg development
 tools (it uses `ar`, `tar` and `md5sum`):
 
 ```sh
-./packaging/debian/build-deb.sh        # target/debian/dnscacher_0.1.0_<arch>.deb
-sudo apt install ./target/debian/dnscacher_0.1.0_amd64.deb
+./packaging/debian/build-deb.sh        # target/debian/dnscacher_0.2.0_<arch>.deb
+sudo apt install ./target/debian/dnscacher_0.2.0_amd64.deb
 sudo systemctl enable --now dnscacher
 ```
 

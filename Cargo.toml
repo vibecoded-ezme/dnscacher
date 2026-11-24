@@ -44,3 +44,17 @@ rand = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive", "env"] }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[profile.release.build-override]
+opt-level = 3
+codegen-units = 1
+
+[profile.release.package."*"]
+opt-level = 3
+codegen-units = 1
