@@ -1,0 +1,2 @@
+target/release/dnscacher usr/bin/
+deploy/dnscacher.toml etc/

@@ -1,0 +1,20 @@
+Source: dnscacher
+Section: net
+Priority: optional
+Maintainer: dnscacher contributors <dnscacher@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13), cargo, rustc
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+Homepage: https://github.com/vibecoded-ezme/dnscacher
+
+Package: dnscacher
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: caching DNS forwarder with DoT and DoH support
+ dnscacher is a small caching DNS forwarder.  It serves plain DNS over UDP and
+ TCP as well as DNS over TLS (DoT) and DNS over HTTPS (DoH), forwards misses to
+ plain, DoT or DoH upstreams, and keeps a persistent cache.
+ .
+ It supports per-domain upstream routing, fixed-lifetime positive and negative
+ caching, hosts-file records and deny lists, AdGuard-style $dnsrewrite rules,
+ DNSSEC pass-through modes, and live cache purging through a Unix socket.

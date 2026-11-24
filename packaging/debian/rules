@@ -1,0 +1,32 @@
+#!/usr/bin/make -f
+
+# Build a binary package from the repository root with:
+#   cp -r packaging/debian debian
+#   dpkg-buildpackage -us -uc -b
+# The standalone packaging/debian/build-deb.sh does the same without debhelper.
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+
+override_dh_auto_build:
+	cargo build --release --locked
+
+override_dh_auto_test:
+	cargo test --release --locked
+
+override_dh_auto_install:
+	# The binary is built by cargo, not by dh_auto_install, so tell dh_install
+	# to read paths from the source tree instead of debian/tmp.
+	dh_install --sourcedir=.
+	install -Dm644 deploy/dnscacher.service \
+		debian/dnscacher/usr/lib/systemd/system/dnscacher.service
+	sed -i \
+		-e 's#/usr/local/bin/#/usr/bin/#' \
+		-e 's#/usr/local/share/#/usr/share/#' \
+		debian/dnscacher/usr/lib/systemd/system/dnscacher.service
+
+override_dh_auto_clean:
+	cargo clean || true
+	dh_auto_clean

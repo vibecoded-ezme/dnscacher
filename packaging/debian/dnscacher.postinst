@@ -1,0 +1,19 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    cat <<'EOF'
+dnscacher is installed but not enabled.
+
+  sudo systemctl enable --now dnscacher
+  dog example.com @127.0.0.1
+
+Configuration: /etc/dnscacher.toml (listens on 127.0.0.1:53 by default).
+Logs:          journalctl -u dnscacher -f
+EOF
+fi
+
+#DEBHELPER#
+
+exit 0
