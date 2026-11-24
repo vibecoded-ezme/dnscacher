@@ -15,6 +15,21 @@ port = 53
 # RuntimeDirectory=dnscacher in dnscacher.service creates /run/dnscacher.
 control = "/run/dnscacher/control.sock"
 
+# Optional DNS over TLS (RFC 7858) and DNS over HTTPS (RFC 8484) listeners.
+# They use the same cache and policy as the plain server.  The unit runs as a
+# DynamicUser, so either make the key readable by that account or uncomment the
+# LoadCredential= lines in dnscacher.service and use the credential paths.
+# [server.dot]
+# port = 853
+# cert = "/etc/dnscacher/tls/cert.pem"
+# key = "/etc/dnscacher/tls/key.pem"
+#
+# [server.doh]
+# port = 443
+# path = "/dns-query"
+# cert = "/etc/dnscacher/tls/cert.pem"
+# key = "/etc/dnscacher/tls/key.pem"
+
 [dns]
 priority = "order" # order, round-robin, random, all
 dnssec = "allow"   # off, allow, enforce

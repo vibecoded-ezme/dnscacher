@@ -24,6 +24,14 @@ StateDirectoryMode=0750
 RuntimeDirectory=dnscacher
 RuntimeDirectoryMode=0750
 
+# Optional: hand the TLS certificate and key to the service through systemd
+# credentials instead of making the key readable by the dynamic user.  Point
+# [server.dot] / [server.doh] cert and key at these paths:
+#   cert = "/run/credentials/dnscacher.service/tls-cert"
+#   key  = "/run/credentials/dnscacher.service/tls-key"
+#LoadCredential=tls-cert:/etc/dnscacher/tls/cert.pem
+#LoadCredential=tls-key:/etc/dnscacher/tls/key.pem
+
 # Keep only the capability needed to bind port 53.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE

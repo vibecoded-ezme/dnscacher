@@ -102,7 +102,7 @@ if [[ $start -eq 1 ]]; then
     cat <<'EOF'
 
 Try it:
-  dig @127.0.0.1 example.com
+  dog example.com @127.0.0.1
 
 Follow the logs:
   journalctl -u dnscacher -f
