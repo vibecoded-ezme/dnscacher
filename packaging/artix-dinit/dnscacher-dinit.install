@@ -1,0 +1,28 @@
+post_install() {
+    cat <<'EOF'
+dnscacher-dinit is installed but dnscacher is not enabled.
+
+  sudo dinitctl enable dnscacher
+  sudo dinitctl start dnscacher
+
+Then check it with:
+
+  dog example.com @127.0.0.1
+  tail -F /var/log/dnscacher.log
+EOF
+}
+
+post_upgrade() {
+    cat <<'EOF'
+dnscacher-dinit was updated.  Restart the service to use the new files:
+
+  sudo dinitctl restart dnscacher
+EOF
+}
+
+pre_remove() {
+    if command -v dinitctl >/dev/null 2>&1; then
+        dinitctl stop dnscacher >/dev/null 2>&1 || true
+        dinitctl disable dnscacher >/dev/null 2>&1 || true
+    fi
+}

@@ -1,0 +1,28 @@
+# Maintainer: ez-me <66479626+ez-me@users.noreply.github.com>
+#
+# Artix dinit service package.  Build the main dnscacher package first (see
+# packaging/arch), then build this with packaging/artix-dinit/build-local.sh.
+#
+# The service is installed but not enabled automatically.
+
+pkgname=dnscacher-dinit
+pkgver=0.3.0
+pkgrel=1
+pkgdesc='dinit service scripts for dnscacher'
+arch=('any')
+url='https://github.com/vibecoded-ezme/dnscacher'
+license=('MIT')
+groups=('dinit-world')
+depends=('dnscacher' 'dinit')
+provides=('init-dnscacher')
+conflicts=('init-dnscacher')
+install=dnscacher-dinit.install
+source=("dnscacher-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+    cd "$srcdir/dnscacher-$pkgver"
+
+    install -Dm644 deploy/dinit/dnscacher "$pkgdir/etc/dinit.d/dnscacher"
+    install -Dm755 deploy/dinit/dinit-run "$pkgdir/usr/lib/dnscacher/dinit-run"
+}
