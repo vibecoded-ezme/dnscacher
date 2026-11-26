@@ -1,0 +1,28 @@
+# Maintainer: ez-me <66479626+ez-me@users.noreply.github.com>
+#
+# Artix OpenRC service package.  Build the main dnscacher package first (see
+# packaging/arch), then build this with packaging/artix-openrc/build-local.sh.
+#
+# The service is installed but not enabled automatically.
+
+pkgname=dnscacher-openrc
+pkgver=0.3.0
+pkgrel=1
+pkgdesc='OpenRC service scripts for dnscacher'
+arch=('any')
+url='https://github.com/vibecoded-ezme/dnscacher'
+license=('MIT')
+groups=('openrc-world')
+depends=('dnscacher' 'openrc')
+provides=('init-dnscacher')
+conflicts=('init-dnscacher')
+install=dnscacher-openrc.install
+source=("dnscacher-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+    cd "$srcdir/dnscacher-$pkgver"
+
+    install -Dm755 deploy/openrc/dnscacher "$pkgdir/etc/init.d/dnscacher"
+    install -Dm644 deploy/openrc/dnscacher.confd "$pkgdir/etc/conf.d/dnscacher"
+}

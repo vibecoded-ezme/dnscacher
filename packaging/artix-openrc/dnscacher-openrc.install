@@ -1,0 +1,30 @@
+post_install() {
+    cat <<'EOF'
+dnscacher-openrc is installed but dnscacher is not enabled.
+
+  sudo rc-update add dnscacher default
+  sudo rc-service dnscacher start
+
+Then check it with:
+
+  dog example.com @127.0.0.1
+  tail -F /var/log/dnscacher.log
+EOF
+}
+
+post_upgrade() {
+    cat <<'EOF'
+dnscacher-openrc was updated.  Restart the service to use the new files:
+
+  sudo rc-service dnscacher restart
+EOF
+}
+
+pre_remove() {
+    if command -v rc-service >/dev/null 2>&1; then
+        rc-service dnscacher stop >/dev/null 2>&1 || true
+    fi
+    if command -v rc-update >/dev/null 2>&1; then
+        rc-update del dnscacher default >/dev/null 2>&1 || true
+    fi
+}
