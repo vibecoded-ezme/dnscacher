@@ -1,468 +1,56 @@
 # dnscacher
 
-A small caching DNS forwarder written in Rust.  It serves ordinary DNS over
-UDP and TCP as well as DNS over TLS (DoT) and DNS over HTTPS (DoH), forwards
-cache misses to plain DNS, DNS over TLS (DoT) or DNS over HTTPS (DoH) upstreams,
-and persists its cache across restarts.
+A small caching DNS forwarder written in Rust.  It serves ordinary DNS over UDP
+and TCP as well as DNS over TLS (DoT) and DNS over HTTPS (DoH), forwards cache
+misses to plain DNS, DoT or DoH upstreams, and persists its cache across
+restarts.
 
 ## Features
 
 - UDP and TCP server on any number of IPv4/IPv6 addresses.
-- Optional DoT (RFC 7858) and DoH (RFC 8484) listeners that use the same cache,
+- Optional DoT (RFC 7858) and DoH (RFC 8484) listeners that share the cache,
   hosts files, rewrite rules and upstream selection.
-- Upstream priority modes: `order`, `round-robin`, `random`, `all`.
 - Plain DNS upstreams (UDP with automatic TCP retry on truncation), DoT via
-  rustls, and DoH (RFC 8484 POST).
-- Encrypted transports first by default (`dot`, `doh`, `ipv6`, `ipv4`), with a
-  per-table `order` override.
-- DoT/DoH hostnames resolve through the same table's plain addresses before
-  the system resolver.
+  rustls, and DoH (RFC 8484 POST), with per-table transport ordering.
 - Per-domain upstream routing, including subdomains.
-- Fixed-lifetime positive and negative caching with TTL adjustment on every
-  hit.
-- Persistent cache snapshots (long-lived plus a frequent crash-recovery copy).
-- Live cache purging by domain or in full (`--purge-cache`, `--purge-cache-all`).
-- `/etc/hosts` style local records, reverse (`PTR`) lookups, deny lists, and
-  policy rewriting of upstream `0.0.0.0`/`::` answers.
+- Fixed-lifetime positive and negative caching with TTL adjustment on every hit.
+- Persistent cache snapshots and live purging by domain or in full.
+- `/etc/hosts` records, reverse (`PTR`) lookups, deny lists, and policy
+  rewriting of upstream `0.0.0.0`/`::` answers.
 - AdGuard-style `$dnsrewrite` rules for CNAME redirects, address overrides and
   response-code overrides.
 - DNSSEC modes: `off`, `allow`, and strict `enforce`.
-- A hardened systemd unit and an s6-rc service for Artix Linux (s6-frontend).
-- Packages for Arch Linux, Alpine, Debian/Ubuntu and Fedora/CentOS/RHEL.
-- EDNS(0) with a 1232-byte upstream payload, UDP truncation for plain clients.
+- EDNS(0) with a 1232-byte upstream payload and UDP truncation for plain clients.
 - Query/response matching to reject spoofed or mismatched upstream answers.
+- systemd, OpenRC, dinit, runit and s6 service definitions, plus packages for
+  Arch Linux, Alpine, Debian/Ubuntu and Fedora/CentOS/RHEL.
 
-## Build and run
+## Quick start
 
 ```sh
 cargo build --release
 sudo ./target/release/dnscacher --config example-config.toml
+dog example.com @127.0.0.1
 ```
 
-Release builds use fat LTO, one codegen unit, `panic = "abort"` and stripped
-symbols (see `[profile.release]` in `Cargo.toml`), so the first build takes
-longer but produces a smaller binary.
-
-### Static musl build
-
-The `x86_64-unknown-linux-musl` target works and produces a static-PIE binary.
-Install the target and a musl compiler (the `rust-musl` and `musl` packages on
-Arch, or `rustup target add x86_64-unknown-linux-musl` plus `musl-tools` on
-Debian), then build with the target's self-contained libc:
-
-```sh
-CC_x86_64_unknown_linux_musl=musl-gcc \
-CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=cc \
-cargo build --release --target x86_64-unknown-linux-musl
-```
-
-`ring` contains C code and needs `musl-gcc`; keeping the host `cc` as the
-linker is what produces a fully static binary.  The result is written to
-`target/x86_64-unknown-linux-musl/release/dnscacher`.
-
-Port 53 needs root or `CAP_NET_BIND_SERVICE`.  For an unprivileged test run:
+Port 53 needs root or `CAP_NET_BIND_SERVICE`.  For an unprivileged test on port
+5353:
 
 ```sh
 cargo run -- --config example-config.toml --port 5353
 dog example.com @127.0.0.1:5353
 ```
 
-Useful options:
-
-```text
--c, --config <PATH>       configuration file (default /etc/dnscacher.toml)
-    --port <PORT>         override [server] port
-    --address <IP>        override [server] address (repeatable)
-    --check               validate the config and print effective settings
-    --purge-cache <DOMAIN> remove a domain and its subdomains from the cache
-    --purge-cache-all     remove every cached entry
-    --log-level <FILTER>  log filter (default "dnscacher=info,warn")
-```
-
-`DNSCACHER_CONFIG`, `DNSCACHER_LOG` and `RUST_LOG` are also read.
-
-### Checks
-
-```sh
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test
-cargo audit
-cargo deny check
-```
-
-`cargo deny` reads `deny.toml` and checks advisories, licenses, duplicate
-versions and crate sources.
-
-### Purging the cache
-
-```sh
-sudo dnscacher --purge-cache example.com   # example.com and *.example.com
-sudo dnscacher --purge-cache-all
-```
-
-The running server owns the in-memory cache, so the commands talk to it over
-the Unix socket configured by `[server] control` (`/run/dnscacher/control.sock`
-in the packaged config).  A purge also rewrites the snapshot files immediately,
-so a later restart does not resurrect the removed entries.
-
-If the server is not running, or no `control` socket is configured, the command
-falls back to rewriting `persistent`/`temporary` directly and prints a note.  In
-that case a *running* server would keep its in-memory entries; configure the
-control socket to avoid that.  Domain matching is label-aware: `example.com`
-matches `example.com` and `www.example.com`, but not `notexample.com`.
-
-## Run as a systemd service
-
-The `deploy/` directory contains a hardened unit and a system-wide config.  Get
-a release binary and install everything with:
-
-```sh
-cargo build --release
-sudo deploy/install.sh
-```
-
-The script installs:
-
-| Path | Purpose |
-|------|---------|
-| `/usr/local/bin/dnscacher` | the binary |
-| `/etc/dnscacher.toml` | configuration, only written if missing |
-| `/etc/systemd/system/dnscacher.service` | the unit |
-| `/usr/local/share/doc/dnscacher/README.md` | this document |
-
-It validates the config, reloads systemd, then enables and starts the service.
-Pass `--force-config` to replace an existing `/etc/dnscacher.toml`, and
-`--no-start` to install without starting.  Running
-`sudo deploy/install.sh --build` also builds the release binary first (as root,
-so make sure `cargo` is on root's `PATH`).
-
-The unit runs as a `DynamicUser` with only `CAP_NET_BIND_SERVICE`, keeps the
-cache under `/var/lib/dnscacher`, and exposes the control socket in
-`/run/dnscacher/control.sock` (`RuntimeDirectory=dnscacher`), and stops with
-SIGTERM so the cache is saved cleanly.
-
-Useful commands:
-
-```sh
-systemctl status dnscacher
-journalctl -u dnscacher -f
-dog example.com @127.0.0.1
-sudo dnscacher --purge-cache example.com
-sudo systemctl disable --now dnscacher
-```
-
-To use it system-wide, point `/etc/resolv.conf` at `127.0.0.1` through your
-network manager rather than editing a managed file.  DoT and DoH hostnames in a
-table are resolved to that table's `ipv4`/`ipv6` addresses first, so normal
-upstream tables work without touching `/etc/hosts`.  Only hosts that are not
-listed in the same table fall back to the system resolver, which may loop if
-that resolver is dnscacher itself; add those to `/etc/hosts` or use plain IP
-upstreams.
-
-### Uninstall
-
-```sh
-sudo deploy/uninstall.sh          # service, binary and documentation
-sudo deploy/uninstall.sh --purge  # also remove /etc/dnscacher.toml and the cache
-```
-
-### Arch Linux package
-
-`packaging/arch/` builds a normal pacman package from the current working tree:
-
-```sh
-./packaging/arch/build-local.sh       # makepkg -si, asks for sudo
-```
-
-Then manage it like any other package:
-
-```sh
-sudo systemctl enable --now dnscacher
-sudo pacman -R dnscacher
-```
-
-The package installs `/usr/bin/dnscacher`, `/etc/dnscacher.toml` (a pacman
-backup file), the unit in `/usr/lib/systemd/system`, and documentation in
-`/usr/share/doc/dnscacher`.  It is not enabled automatically.  A modified
-config is kept as `/etc/dnscacher.toml.pacsave` when you remove the package.
-
-`build-local.sh` stages a source tarball under `target/archpkg/` and passes any
-arguments to `makepkg`, so `./packaging/arch/build-local.sh -f` builds without
-installing.  Don't mix it with `deploy/install.sh` or `deploy/install-s6.sh`:
-those scripts install to `/usr/local` and `/etc/systemd/system` or `/etc/s6/sv`,
-which would shadow the packaged files.
-
-### Debian package
-
-`packaging/debian/` contains a debhelper source tree plus `build-deb.sh`, which
-assembles a binary package without requiring debhelper or dpkg development
-tools (it uses `ar`, `tar` and `md5sum`):
-
-```sh
-./packaging/debian/build-deb.sh        # target/debian/dnscacher_0.3.0_<arch>.deb
-sudo apt install ./target/debian/dnscacher_0.3.0_amd64.deb
-sudo systemctl enable --now dnscacher
-```
-
-The package installs `/usr/bin/dnscacher`, `/etc/dnscacher.toml` (a conffile),
-the unit in `/usr/lib/systemd/system`, and documentation and the license in
-`/usr/share/doc/dnscacher`.  It is not enabled automatically, and a modified
-configuration is left in place when the package is removed.
-
-To build with the regular Debian tooling instead:
-
-```sh
-cp -r packaging/debian debian
-dpkg-buildpackage -us -uc -b
-```
-
-This needs `build-essential`, `debhelper` and a Rust toolchain (`cargo`,
-`rustc`, or `rustup`).  `debian/control` declares the dependencies.
-
-### Fedora, CentOS and RHEL package
-
-`packaging/rpm/` builds a binary RPM with `rpmbuild`:
-
-```sh
-sudo dnf install rpm-build file
-./packaging/rpm/build-rpm.sh
-sudo dnf install target/rpm/RPMS/*/dnscacher-0.3.0-*.rpm
-sudo systemctl enable --now dnscacher
-```
-
-The build script packages the static-PIE musl binary
-(`target/<arch>-unknown-linux-musl/release/dnscacher`, for example
-`x86_64-unknown-linux-musl`).  That binary has no glibc version dependency, so
-the same RPM runs on Fedora, CentOS Stream and RHEL.  If the musl binary is
-missing the script tries to build it; `--host` instead packages
-`target/release/dnscacher`, which inherits the build host's glibc requirement
-(build on the oldest distribution you need to support).  `--skip-build` reuses
-an existing binary and `--release N` sets the RPM release number.  Rebuilding
-the musl binary needs the Rust musl target and `musl-gcc` (see
-[Static musl build](#static-musl-build)).
-
-The RPM installs `/usr/bin/dnscacher`, `/etc/dnscacher.toml` (marked
-`%config(noreplace)`), the unit in `/usr/lib/systemd/system`,
-`/usr/share/doc/dnscacher/README.md` and
-`/usr/share/licenses/dnscacher/LICENSE`.  It is not enabled automatically, and
-a modified configuration is preserved on upgrade.  The package is unsigned;
-install the local file directly with `dnf` (add `--nogpgcheck` if your
-configuration checks local packages) or `rpm -Uvh`.  Remove it with
-`sudo dnf remove dnscacher` (or `rpm -e dnscacher`).
-
-Don't mix it with `deploy/install.sh`: that script installs to `/usr/local`
-and `/etc/systemd/system`, which would shadow the packaged files.
-
-### Alpine Linux package
-
-`packaging/alpine/` contains an APKBUILD and OpenRC service files, plus a script
-that builds installable `.apk` packages from the current tree:
-
-```sh
-./packaging/alpine/build-apk.sh
-sudo apk add --allow-untrusted target/alpine/dnscacher-0.3.0-r0.apk \
-    target/alpine/dnscacher-openrc-0.3.0-r0.apk
-sudo rc-update add dnscacher default
-sudo rc-service dnscacher start
-```
-
-The script packages the static-PIE musl binary, so the package has no runtime
-library dependencies.  It creates the packages with `apk mkpkg` from apk-tools 3,
-which means the prebuilt files target Alpine 3.23 or newer; on older releases,
-build the APKBUILD with `abuild` on the target release.  The packages are
-unsigned, hence `--allow-untrusted`.
-
-The main package installs `/usr/bin/dnscacher`, `/etc/dnscacher.toml`,
-documentation and the license.  `dnscacher-openrc` adds
-`/etc/init.d/dnscacher` and `/etc/conf.d/dnscacher`; install both files
-together, or let a repository index pull the OpenRC subpackage through its
-`install_if` rule.  The service runs as the `dnscacher` user with only
-`CAP_NET_BIND_SERVICE`, stores its cache in `/var/lib/dnscacher`, and logs to
-`/var/log/dnscacher.log`.
-
-`build-apk.sh` needs apk-tools 3, a static musl binary, and `unshare -r` when
-run as a normal user.  Set `APK=/path/to/apk.static` to use a local apk-tools 3
-binary, `--skip-build` to reuse an existing binary, and `--release N` to set the
-Alpine `pkgrel`.
-
-For a native build with the APKBUILD, publish a `v0.3.0` tag (or place the
-source tarball in `$SRCDEST`), then run `abuild checksum` and `abuild -r` from
-`packaging/alpine`.
-
-## Run as an s6 service (Artix Linux)
-
-Artix uses s6-rc through s6-frontend.  The service files live in `deploy/s6/`
-and form a two-service pipeline: `dnscacher-srv` runs the daemon and
-`dnscacher-log` consumes its output with `s6-log`.  The pipeline bundle is
-named `dnscacher`.
-
-Get a release binary and install everything with:
-
-```sh
-cargo build --release
-sudo deploy/install-s6.sh
-```
-
-The script installs:
-
-| Path | Purpose |
-|------|---------|
-| `/usr/local/bin/dnscacher` | the binary |
-| `/etc/dnscacher.toml` | configuration, only written if missing |
-| `/etc/s6/sv/dnscacher-srv` | the longrun service |
-| `/etc/s6/sv/dnscacher-log` | the `s6-log` consumer |
-| `/usr/local/share/doc/dnscacher/README.md` | this document |
-
-It validates the config, syncs the s6-frontend repository, enables the
-`dnscacher` bundle in the current service set, commits and installs that set,
-and starts the service.  On a first s6-frontend installation it runs
-`s6 repository init` if the repository does not exist yet.
-
-s6 has no `DynamicUser=`, so the service runs as root.  It creates
-`/var/lib/dnscacher` and `/run/dnscacher` at startup, matching the paths in the
-packaged config, and logs to `/var/log/dnscacher/current` (or
-`/run/log/dnscacher` while `/var` is not writable yet).
-
-Useful commands:
-
-```sh
-s6 live status dnscacher-srv dnscacher-log
-sudo s6 live restart dnscacher
-tail -F /var/log/dnscacher/current
-dog example.com @127.0.0.1
-sudo s6 live stop dnscacher
-sudo s6 set disable dnscacher && sudo s6 set commit && sudo s6 live install
-```
-
-`--no-start` installs the files and syncs the repository without enabling the
-service.  `--force-config` replaces an existing `/etc/dnscacher.toml`, and
-`--service-dir DIR` installs into a store other than `/etc/s6/sv`.  Do not mix
-this with `deploy/install.sh`: the systemd and s6 installers both write
-`/usr/local/bin/dnscacher` and `/etc/dnscacher.toml`.
-
-After editing a definition under `/etc/s6/sv`, run `s6 repository sync` before
-`s6 set commit` and `s6 live install`, so the repository sees the new files.
-
-### Uninstall
-
-```sh
-sudo deploy/uninstall-s6.sh          # service, binary and documentation
-sudo deploy/uninstall-s6.sh --purge  # also remove the config, cache and logs
-```
-
-### Artix package
-
-`packaging/artix-s6/` builds `dnscacher-s6`, the Artix-style service package.
-Install the main package first, then the service package:
-
-```sh
-./packaging/arch/build-local.sh -f      # build the dnscacher package
-sudo pacman -U target/archpkg/dnscacher-0.3.0-*.pkg.tar.zst
-./packaging/artix-s6/build-local.sh -f  # build the service package
-sudo pacman -U target/artix-s6pkg/dnscacher-s6-0.3.0-*.pkg.tar.zst
-```
-
-The service package installs the two definitions into `/etc/s6/sv` and does not
-enable them; use the `s6 set` and `s6 live` commands above.  It provides and
-conflicts with `init-dnscacher`, following the other Artix service packages.
-
-## Serving DoT and DoH
-
-The DoT and DoH listeners are optional and disabled by default.  They share the
-cache, hosts files, rewrite rules, DNSSEC policy and upstreams with the plain
-server, so a name cached over UDP is also served over TLS and HTTPS.
-
-```toml
-[server]
-address = [ "127.0.0.1", "::1" ]
-port = 53
-
-# DNS over TLS (RFC 7858).
-[server.dot]
-port = 853                    # default 853
-# address = [ "127.0.0.1" ]  # optional; defaults to [server] address
-cert = "/etc/dnscacher/tls/cert.pem"
-key = "/etc/dnscacher/tls/key.pem"
-
-# DNS over HTTPS (RFC 8484).
-[server.doh]
-port = 443                    # default 443
-path = "/dns-query"           # default /dns-query
-cert = "/etc/dnscacher/tls/cert.pem"
-key = "/etc/dnscacher/tls/key.pem"
-```
-
-- `cert` is a PEM certificate chain, leaf certificate first.  `key` may be a
-  PKCS#8, PKCS#1 (RSA) or SEC1 (EC) PEM private key.
-- DoH answers only the configured path.  It accepts `POST` with
-  `Content-Type: application/dns-message` and `GET` with a base64url `?dns=`
-  parameter (padding optional), over HTTP/2 or HTTP/1.1; `h2` is preferred via
-  ALPN.  Request bodies are limited to 65535 bytes.
-- DoT speaks standard two-byte length-prefixed DNS over TLS 1.2/1.3.  Idle
-  DoT connections close after five minutes; plain TCP closes after 30 seconds.
-- A missing, unreadable or mismatched certificate/key pair is an error at
-  startup, and `--check` validates it before the service starts.
-- Ports below 1024 need `CAP_NET_BIND_SERVICE`; the packaged unit already has
-  that capability.  High ports work for unprivileged testing.
-
-### Test certificate
-
-For a local deployment, a self-signed certificate with the right subject
-alternative names is enough:
-
-```sh
-sudo install -d -m 0755 /etc/dnscacher/tls
-sudo openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
-  -keyout /etc/dnscacher/tls/key.pem \
-  -out /etc/dnscacher/tls/cert.pem \
-  -subj '/CN=dnscacher' \
-  -addext 'subjectAltName=DNS:dnscacher,DNS:localhost,IP:127.0.0.1'
-```
-
-Clients must trust that certificate.  `dog` uses OpenSSL's trust store, so for a
-self-signed certificate point `SSL_CERT_FILE` at it; `curl --cacert` and
-`kdig +tls-ca` take the file directly.  With systemd's `DynamicUser=yes`, the
-private key must be readable by the service account.  Either make it
-world-readable (`0644`) or pass it as a systemd credential and point `key` at
-`/run/credentials/dnscacher.service/tls-key`; see the commented
-`LoadCredential=` lines in `deploy/dnscacher.service`.  The s6 service runs as
-root, so the key only needs to be readable by root there.
-
-### Querying the listeners
-
-`dog` speaks plain DNS, DoT and DoH, and is the simplest client:
-
-```sh
-# DoT.  Leave out SSL_CERT_FILE when the certificate is trusted system-wide.
-SSL_CERT_FILE=/etc/dnscacher/tls/cert.pem \
-  dog -S example.com @127.0.0.1:853
-
-# DoH (the URL is the nameserver; -H selects HTTPS).
-SSL_CERT_FILE=/etc/dnscacher/tls/cert.pem \
-  dog -H example.com @https://dns.example.com/dns-query
-
-# JSON output, handy for scripts.
-SSL_CERT_FILE=/etc/dnscacher/tls/cert.pem \
-  dog -H -J example.com @https://dns.example.com/dns-query
-```
-
-`dog` 0.1.0 always connects to port 443 for DoH and cannot select another port,
-so a listener on 8443 needs `curl` or `kdig`.  `dig` has no DoH support; use
-`dog -H`, `kdig +https`, or a browser with a custom DoH URL.
-
-For a non-default port, or to check the HTTP details directly:
-
-```sh
-# DoH POST, where query.bin is a raw DNS query
-curl --http2 --cacert /etc/dnscacher/tls/cert.pem \
-  -H 'content-type: application/dns-message' \
-  --data-binary @query.bin https://127.0.0.1:8443/dns-query
-
-# DoH GET (base64url-encoded query without padding)
-curl --http2 --cacert /etc/dnscacher/tls/cert.pem \
-  'https://127.0.0.1:8443/dns-query?dns=AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB'
-```
+Copy `example-config.toml` to `/etc/dnscacher.toml` for a system-wide setup.
+
+## Documentation
+
+| Document | Contents |
+|----------|----------|
+| [doc/build.md](doc/build.md) | building, static musl, checks, CLI options, cache purging |
+| [doc/dot-doh.md](doc/dot-doh.md) | DoT/DoH listeners, TLS certificates, client examples |
+| [doc/distros.md](doc/distros.md) | systemd, OpenRC, dinit, runit and s6 services; distro packages |
+| [example-config.toml](example-config.toml) | complete annotated configuration |
 
 ## Configuration
 
@@ -483,7 +71,7 @@ port = 53
 control = "/run/dnscacher/control.sock" # optional; enables live cache purging
 
 # Optional DoT and DoH listeners are configured as [server.dot] and
-# [server.doh]; see "Serving DoT and DoH" below.
+# [server.doh]; see doc/dot-doh.md.
 
 [dns]
 priority = "order" # order, round-robin, random, all
@@ -499,7 +87,7 @@ timeout = 5        # optional, seconds per upstream attempt
   shutdown; it exists so a crash does not throw the cache away.  Both are
   postcard-encoded snapshots and may be omitted.
 - `control` is a Unix socket (created with mode `0600`) that accepts purge
-  commands from the same binary.  See [Purging the cache](#purging-the-cache).
+  commands from the same binary.  See [Purging the cache](doc/build.md#purging-the-cache).
 - `cache.ttl` and `cache.nx` are fixed lifetimes: a positive answer is cached
   for `ttl` seconds and a negative one for `nx` seconds, regardless of the TTL
   returned by the upstream.  Stored record TTLs are rewritten to that value and
@@ -634,27 +222,7 @@ DEBUG upstream response peer=127.0.0.1:43630 name=example.org. query_type=A upst
 exact endpoint that answered.  A cache hit logs `cache hit` instead, because no
 upstream was contacted.
 
-For the systemd unit, add an override:
-
-```sh
-sudo systemctl edit dnscacher
-```
-
-```ini
-[Service]
-Environment=DNSCACHER_LOG=dnscacher=debug
-```
-
-Then `sudo systemctl restart dnscacher` and `journalctl -u dnscacher -f`.
-
-With s6, put the variable in the service environment directory and reinstall
-the set:
-
-```sh
-sudo mkdir -p /etc/s6/sv/dnscacher-srv/env
-echo 'dnscacher=debug' | sudo tee /etc/s6/sv/dnscacher-srv/env/DNSCACHER_LOG
-sudo s6 set commit && sudo s6 live install && sudo s6 live restart dnscacher-srv
-```
+For service-specific log settings, see [doc/distros.md](doc/distros.md).
 
 ### DNSSEC
 
@@ -769,7 +337,6 @@ Also supported:
 
 Rewrite rules outrank hosts deny entries but not local hosts records.  A
 local hosts address or PTR record always wins.
-
 ## Behavior notes
 
 - Queries for a name found in a hosts file are answered locally and are not
@@ -782,6 +349,9 @@ local hosts address or PTR record always wins.
 - The server advertises a 1232-byte EDNS payload upstream and truncates UDP
   responses to the client's advertised size (512 bytes without EDNS).  DoT and
   DoH responses are never truncated.
+## Maintainer
+
+ez-me <66479626+ez-me@users.noreply.github.com>
 
 ## License
 
