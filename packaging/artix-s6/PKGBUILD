@@ -1,0 +1,29 @@
+# Maintainer: ez-me <66479626+ez-me@users.noreply.github.com>
+#
+# Artix s6 service package.  Build the main dnscacher package first (see
+# packaging/arch), then build this with packaging/artix-s6/build-local.sh.
+#
+# The service files are installed into /etc/s6/sv, the store used by Artix's
+# s6-frontend configuration.  They are not enabled automatically.
+
+pkgname=dnscacher-s6
+pkgver=0.3.0
+pkgrel=1
+pkgdesc='s6-rc service scripts for dnscacher'
+arch=('any')
+url='https://github.com/vibecoded-ezme/dnscacher'
+license=('MIT')
+groups=('s6-world')
+depends=('dnscacher' 's6-base')
+provides=('init-dnscacher')
+conflicts=('init-dnscacher')
+install=dnscacher-s6.install
+source=("dnscacher-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+    cd "$srcdir/dnscacher-$pkgver"
+
+    install -d "$pkgdir/etc/s6/sv"
+    cp -a deploy/s6/dnscacher-srv deploy/s6/dnscacher-log "$pkgdir/etc/s6/sv/"
+}

@@ -1,0 +1,50 @@
+_s6_sync() {
+    if command -v s6 >/dev/null 2>&1; then
+        s6 repository sync >/dev/null 2>&1 || true
+    fi
+}
+
+post_install() {
+    _s6_sync
+    cat <<'EOF'
+dnscacher-s6 is installed but dnscacher is not enabled.
+
+  sudo s6 set enable dnscacher
+  sudo s6 set commit
+  sudo s6 live install
+  sudo s6 live start dnscacher
+
+Then check it with:
+
+  dog example.com @127.0.0.1
+  tail -F /var/log/dnscacher/current
+EOF
+}
+
+post_upgrade() {
+    _s6_sync
+    if command -v s6 >/dev/null 2>&1; then
+        s6 set commit >/dev/null 2>&1 || true
+        s6 live install >/dev/null 2>&1 || true
+    fi
+    cat <<'EOF'
+dnscacher-s6 was updated.  Restart the service to use new definitions:
+
+  sudo s6 live restart dnscacher
+EOF
+}
+
+pre_remove() {
+    if command -v s6 >/dev/null 2>&1; then
+        s6 live stop dnscacher-srv dnscacher-log >/dev/null 2>&1 || true
+    fi
+}
+
+post_remove() {
+    if command -v s6 >/dev/null 2>&1; then
+        s6 repository sync >/dev/null 2>&1 || true
+        s6 set check -F >/dev/null 2>&1 || true
+        s6 set commit >/dev/null 2>&1 || true
+        s6 live install >/dev/null 2>&1 || true
+    fi
+}
