@@ -1,0 +1,24 @@
+#!/bin/sh
+# s6-log consumer for dnscacher.  Keeps three 2 MB archives and prefixes
+# lines with an ISO 8601 timestamp, in the style of the Artix service templates.
+set -eu
+
+# s6-supervise inherits the boot environment; keep the tools we call reachable.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+if [ -w /var/log ]; then
+    logdir=/var/log/dnscacher
+else
+    # Early boot: /var may still be read-only, so fall back to /run.
+    logdir=/run/log/dnscacher
+fi
+
+if id -u s6log >/dev/null 2>&1; then
+    install -d -o s6log -g s6log -m 0755 "$logdir"
+    exec s6-setuidgid s6log s6-log -d3 -b -- n3 s2000000 T "$logdir"
+fi
+
+# Non-Artix systems may not have the s6log account.
+install -d -m 0755 "$logdir"
+exec s6-log -d3 -b -- n3 s2000000 T "$logdir"
