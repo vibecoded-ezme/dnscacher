@@ -1,0 +1,10 @@
+# Configuration for the dnscacher OpenRC service.
+#
+# The daemon reads its own settings from /etc/dnscacher.toml.  This file only
+# controls how OpenRC starts it.
+
+# Path to the dnscacher configuration file.
+#cfgfile="/etc/dnscacher.toml"
+
+# Extra arguments passed to dnscacher, for example:
+#command_args_extra="--log-level dnscacher=debug"
