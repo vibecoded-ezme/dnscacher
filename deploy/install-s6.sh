@@ -136,6 +136,8 @@ fi
 install -Dm755 "$REPO_DIR/target/release/dnscacher" "$BIN"
 install -Dm644 "$REPO_DIR/README.md" "$DOCDIR/README.md"
 install -Dm644 "$REPO_DIR/LICENSE" "$DOCDIR/LICENSE"
+install -d "$DOCDIR/doc"
+install -m644 "$REPO_DIR"/doc/*.md "$DOCDIR/doc/"
 
 if [[ -e $CONFIG && $force_config -eq 0 ]]; then
     echo "keeping existing $CONFIG (use --force-config to replace it)"
