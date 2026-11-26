@@ -41,10 +41,8 @@ fi
 case "$(uname -m)" in
     x86_64 | amd64) arch=amd64 ;;
     aarch64 | arm64) arch=arm64 ;;
-    armv7l | armhf) arch=armhf ;;
-    i686 | i386) arch=i386 ;;
     *)
-        echo "error: unsupported architecture $(uname -m); pass a .deb arch in the script" >&2
+        echo "error: unsupported architecture $(uname -m); only 64-bit x86_64 and aarch64 are supported" >&2
         exit 1
         ;;
 esac
@@ -89,7 +87,7 @@ cat > "$CONTROL_DIR/control" <<EOF
 Package: $PKG
 Version: $pkgver
 Architecture: $arch
-Maintainer: dnscacher contributors <dnscacher@users.noreply.github.com>
+Maintainer: ez-me <66479626+ez-me@users.noreply.github.com>
 Installed-Size: $installed_size
 Depends: libc6, libgcc-s1
 Section: net

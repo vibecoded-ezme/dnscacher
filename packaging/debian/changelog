@@ -1,12 +1,20 @@
+dnscacher (0.3.0) unstable; urgency=medium
+
+  * Add an s6-rc service for Artix Linux.
+  * Add Fedora, CentOS and RHEL RPM packaging.
+  * Drop 32-bit architecture targets.
+
+ -- ez-me <66479626+ez-me@users.noreply.github.com>  Thu, 26 Nov 2026 00:00:00 +0000
+
 dnscacher (0.2.0) unstable; urgency=medium
 
   * Add inbound DNS-over-TLS and DNS-over-HTTPS listeners.
   * Add AdGuard-style rewrite rules and live cache purging.
 
- -- dnscacher contributors <dnscacher@users.noreply.github.com>  Mon, 23 Nov 2026 00:00:00 +0000
+ -- ez-me <66479626+ez-me@users.noreply.github.com>  Mon, 23 Nov 2026 00:00:00 +0000
 
 dnscacher (0.1.0) unstable; urgency=medium
 
   * Initial release.
 
- -- dnscacher contributors <dnscacher@users.noreply.github.com>  Mon, 23 Nov 2026 00:00:00 +0000
+ -- ez-me <66479626+ez-me@users.noreply.github.com>  Mon, 23 Nov 2026 00:00:00 +0000
