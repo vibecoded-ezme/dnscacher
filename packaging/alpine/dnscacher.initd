@@ -1,0 +1,43 @@
+#!/sbin/openrc-run
+
+name="dnscacher"
+description="dnscacher caching DNS forwarder"
+
+: ${cfgfile:=/etc/dnscacher.toml}
+: ${command_args_extra:=}
+
+command="/usr/bin/dnscacher"
+command_args="--config $cfgfile $command_args_extra"
+command_user="dnscacher:dnscacher"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+
+supervisor="supervise-daemon"
+respawn_delay=2
+respawn_max=5
+
+# The daemon only needs to bind port 53; everything else runs as dnscacher.
+capabilities="^cap_net_bind_service"
+
+output_log="/var/log/${RC_SVCNAME}.log"
+error_log="/var/log/${RC_SVCNAME}.log"
+
+required_files="$cfgfile"
+
+depend() {
+	need net
+	use logger
+	before nss-lookup
+	provide dns
+}
+
+start_pre() {
+	checkpath -q -d -m 0750 -o dnscacher -g dnscacher \
+		/var/lib/dnscacher /run/dnscacher
+	checkpath -q -f -m 0640 -o dnscacher -g dnscacher \
+		/var/log/${RC_SVCNAME}.log
+
+	ebegin "Checking $cfgfile"
+	/usr/bin/dnscacher --check --config "$cfgfile" >/dev/null
+	eend $?
+}

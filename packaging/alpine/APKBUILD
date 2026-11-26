@@ -1,0 +1,56 @@
+# Maintainer: ez-me <66479626+ez-me@users.noreply.github.com>
+pkgname=dnscacher
+pkgver=0.3.0
+pkgrel=0
+pkgdesc="Caching DNS forwarder with UDP, TCP, DoT and DoH support"
+url="https://github.com/vibecoded-ezme/dnscacher"
+arch="x86_64 aarch64 ppc64le s390x"
+license="MIT"
+pkgusers="dnscacher"
+pkggroups="dnscacher"
+makedepends="cargo"
+subpackages="$pkgname-openrc"
+options="net"
+source="$pkgname-$pkgver.tar.gz::https://github.com/vibecoded-ezme/dnscacher/archive/refs/tags/v$pkgver.tar.gz
+	$pkgname.initd
+	$pkgname.confd
+	build-apk.sh
+	"
+builddir="$srcdir/$pkgname-$pkgver"
+
+prepare() {
+	default_prepare
+	cargo fetch --locked
+}
+
+build() {
+	cargo build --release --locked --frozen
+}
+
+check() {
+	cargo test --release --locked --frozen
+}
+
+package() {
+	install -Dm755 target/release/dnscacher \
+		"$pkgdir"/usr/bin/dnscacher
+	install -Dm644 deploy/dnscacher.toml \
+		"$pkgdir"/etc/dnscacher.toml
+	install -Dm644 README.md \
+		"$pkgdir"/usr/share/doc/$pkgname/README.md
+	install -Dm644 LICENSE \
+		"$pkgdir"/usr/share/licenses/$pkgname/LICENSE
+	install -Dm755 "$srcdir"/$pkgname.initd \
+		"$pkgdir"/etc/init.d/$pkgname
+	install -Dm644 "$srcdir"/$pkgname.confd \
+		"$pkgdir"/etc/conf.d/$pkgname
+}
+
+# Run 'abuild checksum' after the v$pkgver tag is published, or after placing
+# the source tarball in $SRCDEST, to fill in the tarball checksum below.
+sha512sums="
+0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000  dnscacher-0.3.0.tar.gz
+754f0f88a3867d1be13cbadc98e279091f9d9651c823f1660c88627ed09d7825abcc4566041461e19cc783743afdc9b639feb8ac30352f32f499078f90f59713  dnscacher.initd
+3337335e69f81fb1dd15149b999bec2c39ef738445a2b88e9fb5055afd3e6a373003fec72bdfe0880387f9f4dd5b22c8aac1d7d5cb9fa8a07ce7fff955ab3dec  dnscacher.confd
+90b9bf48b804f2048a5f47512d35c79245e24df1b6b5884ba0e2fd0dd15265643df0b0ab9af1dd8e7b8b0e74c188b21f66f1b35671db14787acda719d711c82c  build-apk.sh
+"
