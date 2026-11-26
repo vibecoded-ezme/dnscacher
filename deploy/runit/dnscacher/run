@@ -1,0 +1,14 @@
+#!/bin/sh
+# runit service for dnscacher.
+set -eu
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+[ -r conf ] && . ./conf
+
+install -d -m 0750 /var/lib/dnscacher /run/dnscacher
+/usr/bin/dnscacher --check --config /etc/dnscacher.toml >/dev/null
+
+exec 2>&1
+exec /usr/bin/dnscacher --config /etc/dnscacher.toml
