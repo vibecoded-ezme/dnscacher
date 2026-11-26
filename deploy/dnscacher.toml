@@ -4,7 +4,7 @@
 [cache]
 ttl = 86_400 # fixed seconds a positive answer is cached (overrides upstream TTL)
 nx = 3_600   # fixed seconds a negative answer is cached (overrides SOA MINIMUM)
-# StateDirectory=dnscacher in dnscacher.service maps to /var/lib/dnscacher.
+# The packaged systemd and s6 services create this directory.
 persistent = '/var/lib/dnscacher/cache.bin' # loaded at startup, written periodically and on exit
 temporary = '/var/lib/dnscacher/cache.tmp'  # frequent crash-recovery snapshot
 
@@ -12,13 +12,14 @@ temporary = '/var/lib/dnscacher/cache.tmp'  # frequent crash-recovery snapshot
 address = [ "127.0.0.1", "::1" ]
 port = 53
 # Unix socket used by `dnscacher --purge-cache DOMAIN` and `--purge-cache-all`.
-# RuntimeDirectory=dnscacher in dnscacher.service creates /run/dnscacher.
+# The packaged services create /run/dnscacher at startup.
 control = "/run/dnscacher/control.sock"
 
 # Optional DNS over TLS (RFC 7858) and DNS over HTTPS (RFC 8484) listeners.
-# They use the same cache and policy as the plain server.  The unit runs as a
-# DynamicUser, so either make the key readable by that account or uncomment the
-# LoadCredential= lines in dnscacher.service and use the credential paths.
+# They use the same cache and policy as the plain server.  The systemd unit
+# runs as a DynamicUser, so either make the key readable by that account or
+# uncomment the LoadCredential= lines in dnscacher.service and use the
+# credential paths.  The s6 service runs as root and reads the key directly.
 # [server.dot]
 # port = 853
 # cert = "/etc/dnscacher/tls/cert.pem"
@@ -39,16 +40,11 @@ hosts = [ '/etc/hosts', '/etc/hosts.deny' ]
 deny = "nx"        # nx/nxdomain, zero, loopback/loop, ip, or { ip = { ... } }
 # timeout = 5      # seconds per upstream attempt
 
-# Only use this server for nintendowifi.net and its subdomains.
 [dns.1]
-ipv4 = [ "95.217.77.181" ]
-domains = [ "nintendowifi.net" ]
-
 # Every table can hold several transports, tried as DoT, DoH, IPv6, IPv4 by default.
 # DoT/DoH hostnames are resolved to the ipv4/ipv6 addresses of the same table first, then via the system resolver.
 # The defaults are port 53 for plain DNS, 853 for DoT and 443 for DoH
 # Use an inline table or a nested [dns.N.ipv4] table when a non-default port is needed.
-[dns.2]
 # order = [ "dot", "doh", "ipv6", "ipv4" ] # default
 ipv4 = [ "1.1.1.1", "1.0.0.1" ]
 ipv6 = [ "2606:4700:4700::1111", "2606:4700:4700::1001" ]
