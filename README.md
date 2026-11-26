@@ -27,6 +27,8 @@ and persists its cache across restarts.
 - AdGuard-style `$dnsrewrite` rules for CNAME redirects, address overrides and
   response-code overrides.
 - DNSSEC modes: `off`, `allow`, and strict `enforce`.
+- A hardened systemd unit and an s6-rc service for Artix Linux (s6-frontend).
+- Packages for Arch Linux, Alpine, Debian/Ubuntu and Fedora/CentOS/RHEL.
 - EDNS(0) with a 1232-byte upstream payload, UDP truncation for plain clients.
 - Query/response matching to reject spoofed or mismatched upstream answers.
 
@@ -40,6 +42,23 @@ sudo ./target/release/dnscacher --config example-config.toml
 Release builds use fat LTO, one codegen unit, `panic = "abort"` and stripped
 symbols (see `[profile.release]` in `Cargo.toml`), so the first build takes
 longer but produces a smaller binary.
+
+### Static musl build
+
+The `x86_64-unknown-linux-musl` target works and produces a static-PIE binary.
+Install the target and a musl compiler (the `rust-musl` and `musl` packages on
+Arch, or `rustup target add x86_64-unknown-linux-musl` plus `musl-tools` on
+Debian), then build with the target's self-contained libc:
+
+```sh
+CC_x86_64_unknown_linux_musl=musl-gcc \
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=cc \
+cargo build --release --target x86_64-unknown-linux-musl
+```
+
+`ring` contains C code and needs `musl-gcc`; keeping the host `cc` as the
+linker is what produces a fully static binary.  The result is written to
+`target/x86_64-unknown-linux-musl/release/dnscacher`.
 
 Port 53 needs root or `CAP_NET_BIND_SERVICE`.  For an unprivileged test run:
 
@@ -170,8 +189,9 @@ config is kept as `/etc/dnscacher.toml.pacsave` when you remove the package.
 
 `build-local.sh` stages a source tarball under `target/archpkg/` and passes any
 arguments to `makepkg`, so `./packaging/arch/build-local.sh -f` builds without
-installing.  Don't mix it with `deploy/install.sh`: that script installs to
-`/usr/local` and `/etc/systemd/system`, which would shadow the packaged unit.
+installing.  Don't mix it with `deploy/install.sh` or `deploy/install-s6.sh`:
+those scripts install to `/usr/local` and `/etc/systemd/system` or `/etc/s6/sv`,
+which would shadow the packaged files.
 
 ### Debian package
 
@@ -180,8 +200,8 @@ assembles a binary package without requiring debhelper or dpkg development
 tools (it uses `ar`, `tar` and `md5sum`):
 
 ```sh
-./packaging/debian/build-deb.sh        # target/debian/dnscacher_0.2.0_<arch>.deb
-sudo apt install ./target/debian/dnscacher_0.2.0_amd64.deb
+./packaging/debian/build-deb.sh        # target/debian/dnscacher_0.3.0_<arch>.deb
+sudo apt install ./target/debian/dnscacher_0.3.0_amd64.deb
 sudo systemctl enable --now dnscacher
 ```
 
@@ -199,6 +219,153 @@ dpkg-buildpackage -us -uc -b
 
 This needs `build-essential`, `debhelper` and a Rust toolchain (`cargo`,
 `rustc`, or `rustup`).  `debian/control` declares the dependencies.
+
+### Fedora, CentOS and RHEL package
+
+`packaging/rpm/` builds a binary RPM with `rpmbuild`:
+
+```sh
+sudo dnf install rpm-build file
+./packaging/rpm/build-rpm.sh
+sudo dnf install target/rpm/RPMS/*/dnscacher-0.3.0-*.rpm
+sudo systemctl enable --now dnscacher
+```
+
+The build script packages the static-PIE musl binary
+(`target/<arch>-unknown-linux-musl/release/dnscacher`, for example
+`x86_64-unknown-linux-musl`).  That binary has no glibc version dependency, so
+the same RPM runs on Fedora, CentOS Stream and RHEL.  If the musl binary is
+missing the script tries to build it; `--host` instead packages
+`target/release/dnscacher`, which inherits the build host's glibc requirement
+(build on the oldest distribution you need to support).  `--skip-build` reuses
+an existing binary and `--release N` sets the RPM release number.  Rebuilding
+the musl binary needs the Rust musl target and `musl-gcc` (see
+[Static musl build](#static-musl-build)).
+
+The RPM installs `/usr/bin/dnscacher`, `/etc/dnscacher.toml` (marked
+`%config(noreplace)`), the unit in `/usr/lib/systemd/system`,
+`/usr/share/doc/dnscacher/README.md` and
+`/usr/share/licenses/dnscacher/LICENSE`.  It is not enabled automatically, and
+a modified configuration is preserved on upgrade.  The package is unsigned;
+install the local file directly with `dnf` (add `--nogpgcheck` if your
+configuration checks local packages) or `rpm -Uvh`.  Remove it with
+`sudo dnf remove dnscacher` (or `rpm -e dnscacher`).
+
+Don't mix it with `deploy/install.sh`: that script installs to `/usr/local`
+and `/etc/systemd/system`, which would shadow the packaged files.
+
+### Alpine Linux package
+
+`packaging/alpine/` contains an APKBUILD and OpenRC service files, plus a script
+that builds installable `.apk` packages from the current tree:
+
+```sh
+./packaging/alpine/build-apk.sh
+sudo apk add --allow-untrusted target/alpine/dnscacher-0.3.0-r0.apk \
+    target/alpine/dnscacher-openrc-0.3.0-r0.apk
+sudo rc-update add dnscacher default
+sudo rc-service dnscacher start
+```
+
+The script packages the static-PIE musl binary, so the package has no runtime
+library dependencies.  It creates the packages with `apk mkpkg` from apk-tools 3,
+which means the prebuilt files target Alpine 3.23 or newer; on older releases,
+build the APKBUILD with `abuild` on the target release.  The packages are
+unsigned, hence `--allow-untrusted`.
+
+The main package installs `/usr/bin/dnscacher`, `/etc/dnscacher.toml`,
+documentation and the license.  `dnscacher-openrc` adds
+`/etc/init.d/dnscacher` and `/etc/conf.d/dnscacher`; install both files
+together, or let a repository index pull the OpenRC subpackage through its
+`install_if` rule.  The service runs as the `dnscacher` user with only
+`CAP_NET_BIND_SERVICE`, stores its cache in `/var/lib/dnscacher`, and logs to
+`/var/log/dnscacher.log`.
+
+`build-apk.sh` needs apk-tools 3, a static musl binary, and `unshare -r` when
+run as a normal user.  Set `APK=/path/to/apk.static` to use a local apk-tools 3
+binary, `--skip-build` to reuse an existing binary, and `--release N` to set the
+Alpine `pkgrel`.
+
+For a native build with the APKBUILD, publish a `v0.3.0` tag (or place the
+source tarball in `$SRCDEST`), then run `abuild checksum` and `abuild -r` from
+`packaging/alpine`.
+
+## Run as an s6 service (Artix Linux)
+
+Artix uses s6-rc through s6-frontend.  The service files live in `deploy/s6/`
+and form a two-service pipeline: `dnscacher-srv` runs the daemon and
+`dnscacher-log` consumes its output with `s6-log`.  The pipeline bundle is
+named `dnscacher`.
+
+Get a release binary and install everything with:
+
+```sh
+cargo build --release
+sudo deploy/install-s6.sh
+```
+
+The script installs:
+
+| Path | Purpose |
+|------|---------|
+| `/usr/local/bin/dnscacher` | the binary |
+| `/etc/dnscacher.toml` | configuration, only written if missing |
+| `/etc/s6/sv/dnscacher-srv` | the longrun service |
+| `/etc/s6/sv/dnscacher-log` | the `s6-log` consumer |
+| `/usr/local/share/doc/dnscacher/README.md` | this document |
+
+It validates the config, syncs the s6-frontend repository, enables the
+`dnscacher` bundle in the current service set, commits and installs that set,
+and starts the service.  On a first s6-frontend installation it runs
+`s6 repository init` if the repository does not exist yet.
+
+s6 has no `DynamicUser=`, so the service runs as root.  It creates
+`/var/lib/dnscacher` and `/run/dnscacher` at startup, matching the paths in the
+packaged config, and logs to `/var/log/dnscacher/current` (or
+`/run/log/dnscacher` while `/var` is not writable yet).
+
+Useful commands:
+
+```sh
+s6 live status dnscacher-srv dnscacher-log
+sudo s6 live restart dnscacher
+tail -F /var/log/dnscacher/current
+dog example.com @127.0.0.1
+sudo s6 live stop dnscacher
+sudo s6 set disable dnscacher && sudo s6 set commit && sudo s6 live install
+```
+
+`--no-start` installs the files and syncs the repository without enabling the
+service.  `--force-config` replaces an existing `/etc/dnscacher.toml`, and
+`--service-dir DIR` installs into a store other than `/etc/s6/sv`.  Do not mix
+this with `deploy/install.sh`: the systemd and s6 installers both write
+`/usr/local/bin/dnscacher` and `/etc/dnscacher.toml`.
+
+After editing a definition under `/etc/s6/sv`, run `s6 repository sync` before
+`s6 set commit` and `s6 live install`, so the repository sees the new files.
+
+### Uninstall
+
+```sh
+sudo deploy/uninstall-s6.sh          # service, binary and documentation
+sudo deploy/uninstall-s6.sh --purge  # also remove the config, cache and logs
+```
+
+### Artix package
+
+`packaging/artix-s6/` builds `dnscacher-s6`, the Artix-style service package.
+Install the main package first, then the service package:
+
+```sh
+./packaging/arch/build-local.sh -f      # build the dnscacher package
+sudo pacman -U target/archpkg/dnscacher-0.3.0-*.pkg.tar.zst
+./packaging/artix-s6/build-local.sh -f  # build the service package
+sudo pacman -U target/artix-s6pkg/dnscacher-s6-0.3.0-*.pkg.tar.zst
+```
+
+The service package installs the two definitions into `/etc/s6/sv` and does not
+enable them; use the `s6 set` and `s6 live` commands above.  It provides and
+conflicts with `init-dnscacher`, following the other Artix service packages.
 
 ## Serving DoT and DoH
 
@@ -259,7 +426,8 @@ self-signed certificate point `SSL_CERT_FILE` at it; `curl --cacert` and
 private key must be readable by the service account.  Either make it
 world-readable (`0644`) or pass it as a systemd credential and point `key` at
 `/run/credentials/dnscacher.service/tls-key`; see the commented
-`LoadCredential=` lines in `deploy/dnscacher.service`.
+`LoadCredential=` lines in `deploy/dnscacher.service`.  The s6 service runs as
+root, so the key only needs to be readable by root there.
 
 ### Querying the listeners
 
@@ -478,6 +646,15 @@ Environment=DNSCACHER_LOG=dnscacher=debug
 ```
 
 Then `sudo systemctl restart dnscacher` and `journalctl -u dnscacher -f`.
+
+With s6, put the variable in the service environment directory and reinstall
+the set:
+
+```sh
+sudo mkdir -p /etc/s6/sv/dnscacher-srv/env
+echo 'dnscacher=debug' | sudo tee /etc/s6/sv/dnscacher-srv/env/DNSCACHER_LOG
+sudo s6 set commit && sudo s6 live install && sudo s6 live restart dnscacher-srv
+```
 
 ### DNSSEC
 

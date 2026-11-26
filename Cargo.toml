@@ -1,7 +1,8 @@
 [package]
 name = "dnscacher"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
+authors = ["ez-me <66479626+ez-me@users.noreply.github.com>"]
 description = "A caching DNS forwarder with UDP, TCP, DoT and DoH server and upstreams"
 license = "MIT"
 repository = "https://github.com/vibecoded-ezme/dnscacher"
