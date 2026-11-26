@@ -1,0 +1,9 @@
+#!/bin/sh
+# svlogd logger for the dnscacher runit service.
+set -eu
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+install -d -m 0755 /var/log/dnscacher
+exec svlogd -tt /var/log/dnscacher
