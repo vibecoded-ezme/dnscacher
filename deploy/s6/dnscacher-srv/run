@@ -1,0 +1,43 @@
+#!/bin/sh
+# s6-rc longrun for dnscacher.  Output is consumed by the dnscacher-log
+# service, which is attached with producer-for/consumer-for.
+set -eu
+
+# s6-supervise inherits the boot environment; keep the tools we call reachable.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+# Send both streams to the log pipeline.
+exec 2>&1
+
+config=${DNSCACHER_CONFIG:-/etc/dnscacher.toml}
+
+# A source install uses /usr/local, the Artix package uses /usr.  Honour an
+# explicit override first so the environment directory can point elsewhere.
+if [ -n "${DNSCACHER_BIN:-}" ] && [ -x "$DNSCACHER_BIN" ]; then
+    bin=$DNSCACHER_BIN
+elif [ -x /usr/local/bin/dnscacher ]; then
+    bin=/usr/local/bin/dnscacher
+elif [ -x /usr/bin/dnscacher ]; then
+    bin=/usr/bin/dnscacher
+else
+    echo "dnscacher: binary not found (set DNSCACHER_BIN or install it in /usr/bin or /usr/local/bin)" >&2
+    sleep 5
+    exit 1
+fi
+
+# The systemd unit gets these from StateDirectory= and RuntimeDirectory=.
+# s6 has no equivalent, so create them here; root owns the service.
+if ! install -d -m 0750 /var/lib/dnscacher /run/dnscacher; then
+    echo "dnscacher: cannot create /var/lib/dnscacher or /run/dnscacher" >&2
+    sleep 5
+    exit 1
+fi
+
+if ! "$bin" --check --config "$config" >/dev/null; then
+    echo "dnscacher: configuration check failed for $config" >&2
+    sleep 5
+    exit 1
+fi
+
+exec "$bin" --config "$config"
