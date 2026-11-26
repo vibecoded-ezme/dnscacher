@@ -1,0 +1,10 @@
+#!/bin/sh
+# dinit wrapper: prepare runtime directories, validate the config, then run.
+set -eu
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+install -d -m 0750 /var/lib/dnscacher /run/dnscacher
+/usr/bin/dnscacher --check --config /etc/dnscacher.toml >/dev/null
+exec /usr/bin/dnscacher --config /etc/dnscacher.toml

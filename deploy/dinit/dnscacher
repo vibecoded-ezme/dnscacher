@@ -1,0 +1,11 @@
+type = process
+command = /usr/lib/dnscacher/dinit-run
+smooth-recovery = true
+restart = true
+restart-delay = 2
+restart-limit-count = 5
+restart-limit-interval = 30
+depends-on = network.target
+before = login.target
+logfile = /var/log/dnscacher.log
+logfile-permissions = 0640
