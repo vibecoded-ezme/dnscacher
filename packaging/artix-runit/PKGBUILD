@@ -1,0 +1,29 @@
+# Maintainer: ez-me <66479626+ez-me@users.noreply.github.com>
+#
+# Artix runit service package.  Build the main dnscacher package first (see
+# packaging/arch), then build this with packaging/artix-runit/build-local.sh.
+#
+# The service is installed but not enabled automatically.
+
+pkgname=dnscacher-runit
+pkgver=0.3.0
+pkgrel=1
+pkgdesc='runit service scripts for dnscacher'
+arch=('any')
+url='https://github.com/vibecoded-ezme/dnscacher'
+license=('MIT')
+groups=('runit-galaxy')
+depends=('dnscacher' 'runit')
+provides=('init-dnscacher')
+conflicts=('init-dnscacher')
+install=dnscacher-runit.install
+source=("dnscacher-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+    cd "$srcdir/dnscacher-$pkgver"
+
+    install -Dm755 deploy/runit/dnscacher/run "$pkgdir/etc/runit/sv/dnscacher/run"
+    install -Dm755 deploy/runit/dnscacher/log/run \
+        "$pkgdir/etc/runit/sv/dnscacher/log/run"
+}
