@@ -1,6 +1,7 @@
 post_install() {
-    systemctl daemon-reload
-    cat <<'EOF'
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload
+        cat <<'EOF'
 dnscacher is installed but not enabled.
 
   sudo systemctl enable --now dnscacher
@@ -9,20 +10,40 @@ dnscacher is installed but not enabled.
 Configuration: /etc/dnscacher.toml (listens on 127.0.0.1:53 by default).
 Logs:          journalctl -u dnscacher -f
 EOF
+    else
+        cat <<'EOF'
+dnscacher is installed but no systemd service was registered.
+
+On Artix s6, install the dnscacher-s6 package, then enable the service:
+
+  sudo s6 set enable dnscacher
+  sudo s6 set commit
+  sudo s6 live install
+  sudo s6 live start dnscacher
+
+Configuration: /etc/dnscacher.toml (listens on 127.0.0.1:53 by default).
+EOF
+    fi
 }
 
 post_upgrade() {
-    systemctl daemon-reload
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload
 
-    if systemctl is-active --quiet dnscacher.service; then
-        systemctl try-restart dnscacher.service
+        if systemctl is-active --quiet dnscacher.service; then
+            systemctl try-restart dnscacher.service
+        fi
     fi
 }
 
 pre_remove() {
-    systemctl disable --now dnscacher.service 2>/dev/null || true
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl disable --now dnscacher.service 2>/dev/null || true
+    fi
 }
 
 post_remove() {
-    systemctl daemon-reload
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl daemon-reload
+    fi
 }

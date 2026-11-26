@@ -1,4 +1,4 @@
-# Maintainer: dnscacher contributors
+# Maintainer: ez-me <66479626+ez-me@users.noreply.github.com>
 #
 # Local-testing PKGBUILD.  It expects the source tarball produced by
 # packaging/arch/build-local.sh, which is also what you should run:
@@ -9,7 +9,7 @@
 # sha256sums instead of SKIP.
 
 pkgname=dnscacher
-pkgver=0.2.0
+pkgver=0.3.0
 pkgrel=1
 pkgdesc='Caching DNS forwarder with UDP, TCP, DoT and DoH server and upstreams'
 arch=('x86_64' 'aarch64')
